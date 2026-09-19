@@ -264,7 +264,15 @@ def execute(answers: dict, cfg: dict, harness: dict | None = None) -> str:
         return agents.spawn(detail or app or "unnamed task", cfg)
     if route == "tool":
         tool_name = answers.get("tool", {}).get("choice", "")
-        if tools.risk_of(tool_name) == "safe" or risk <= threshold:
+        tier = tools.risk_of(tool_name)
+        if tier == "shell":
+            if tools.denied(detail):
+                return "REFUSED (denylisted command)"
+            if cfg.get("agent", {}).get("allow_shell", "false") != "true":
+                return "BLOCKED (shell tool needs allow_shell=true in config)"
+        if tier == "mutating" and risk > threshold:
+            return f"BLOCKED (tool {tool_name!r} needs confirmation)"
+        if tier == "safe" or risk <= threshold:
             return tools.run(tool_name, detail, cfg, harness)
         return f"BLOCKED (tool {tool_name!r} needs confirmation)"
     if route == "answer" or action == "answer" or app == "none":

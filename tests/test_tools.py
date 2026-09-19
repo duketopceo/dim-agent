@@ -88,6 +88,28 @@ class TestRouteDispatch(unittest.TestCase):
             {"agent": {"risk_threshold": "1.5"}})
         self.assertEqual(out, "ANSWERED")
 
+    def test_shell_tool_blocked_by_default(self):
+        out = pipeline.execute(
+            self.answers("tool", tool="shell", detail="ls -la"),
+            {"agent": {"risk_threshold": "1.5"}})
+        self.assertIn("allow_shell", out)
+
+    def test_shell_tool_denylist_refused(self):
+        out = pipeline.execute(
+            self.answers("tool", tool="shell", detail="rm -rf /"),
+            {"agent": {"risk_threshold": "1.5", "allow_shell": "true"}})
+        self.assertTrue(out.startswith("REFUSED"))
+
+    def test_shell_tool_runs_when_allowed(self):
+        with mock.patch.object(tools.system.subprocess, "run") as r:
+            r.return_value = mock.Mock(returncode=0, stdout="ok",
+                                       stderr="")
+            out = pipeline.execute(
+                self.answers("tool", tool="shell", detail="ls"),
+                {"agent": {"risk_threshold": "1.5",
+                           "allow_shell": "true"}})
+        self.assertIn("SHELL", out)
+
     def test_risk_blocks_before_route(self):
         out = pipeline.execute(
             self.answers("tool", tool="shell", detail="ls", risk=2.5),
