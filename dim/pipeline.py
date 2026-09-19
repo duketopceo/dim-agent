@@ -77,13 +77,6 @@ JEV_QUESTIONS = {
                         "route is 'tool'.",
         "criteria": {},  # filled from the registry in build_questions
     },
-    "detail": {
-        "type": "text",
-        "instructions": "The argument or payload for the request: the tool "
-                        "argument (workspace number, text to type, command, "
-                        "search pattern), the agent task description, or the "
-                        "text answer for the user. Empty when not needed.",
-    },
 }
 
 
@@ -246,14 +239,16 @@ def is_low_confidence(answers: dict, cfg: dict) -> bool:
     return app_conf < thresh
 
 
-def execute(answers: dict, cfg: dict, harness: dict | None = None) -> str:
+def execute(answers: dict, cfg: dict, harness: dict | None = None,
+            detail: str = "") -> str:
     """Route-aware dispatch. Falls back to the legacy action-based path
-    when Jev's response lacks the route question."""
+    when Jev's response lacks the route question. Jev only answers typed
+    questions (noul/choice/score) — free-text args come from the
+    transcript via `detail`."""
     from . import agents, tools
     route = answers.get("route", {}).get("choice")
     action = answers.get("action", {}).get("choice")
     app = answers.get("app", {}).get("choice")
-    detail = _detail(answers)
     risk = float(answers.get("risk", {}).get("score", 2))
     threshold = float(cfg.get("agent", {}).get("risk_threshold", "1.5"))
 
@@ -284,11 +279,13 @@ def execute(answers: dict, cfg: dict, harness: dict | None = None) -> str:
     return f"SKIP (route={route!r} action={action!r} unhandled)"
 
 
-def _detail(answers: dict) -> str:
-    d = answers.get("detail", {})
-    if isinstance(d, dict):
-        return str(d.get("text") or d.get("value") or d.get("answer") or "")
-    return str(d) if d else ""
+def answer_text(transcript: str) -> str:
+    """Canned reply for the answer route — Jev returns no free text."""
+    low = transcript.lower()
+    if "what can" in low or "help" in low or "commands" in low:
+        return ('Try "open discord", "screenshot", "go to workspace 2", '
+                'or "agent, research X" — I route to apps, tools, and agents.')
+    return f'You said: "{transcript}". Not a desktop action I can take yet.'
 
 
 def log_decision(record_dict: dict, log_file=config.DECISIONS) -> None:
@@ -381,9 +378,9 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
         if corrected:
             answers = corrected
         state.transition("acting")
-        result = execute(answers, cfg, harness)
+        result = execute(answers, cfg, harness, detail=text)
         if result == "ANSWERED":
-            reply = _detail(answers) or text
+            reply = answer_text(text)
             state.transition("done", result=result, answer=reply)
             speak(reply, cfg)
         else:

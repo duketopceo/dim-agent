@@ -90,7 +90,7 @@ Item {
   Column {
     visible: root.opened
     anchors.centerIn: parent
-    spacing: Style.marginMedium
+    spacing: 12
     width: Math.min(parent.width * 0.5, 640)
 
     Text {
@@ -99,8 +99,8 @@ Item {
           : root.status === "awaiting_choice" ? "which did you mean?"
           : "Dim"
       color: root.accent
-      font.family: Style.font.family
-      font.pixelSize: Style.font.large
+      font.family: "sans-serif"
+      font.pixelSize: 22
     }
 
     Text {
@@ -110,14 +110,14 @@ Item {
       wrapMode: Text.WordWrap
       text: root.transcript
       color: root.fg
-      font.family: Style.font.family
-      font.pixelSize: Style.font.normal
+      font.family: "sans-serif"
+      font.pixelSize: 15
     }
 
     Row {
       visible: root.choices.length > 0
       anchors.horizontalCenter: parent.horizontalCenter
-      spacing: Style.marginSmall
+      spacing: 8
 
       Repeater {
         model: root.choices

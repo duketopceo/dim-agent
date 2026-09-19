@@ -59,7 +59,6 @@ class TestRouteDispatch(unittest.TestCase):
                 risk=1.0):
         return {"route": {"choice": route},
                 "tool": {"choice": tool},
-                "detail": {"text": detail},
                 "action": {"choice": action},
                 "app": {"choice": app},
                 "risk": {"score": risk}}
@@ -68,8 +67,8 @@ class TestRouteDispatch(unittest.TestCase):
         with mock.patch.object(tools, "run",
                                return_value="WORKSPACE 3") as r:
             out = pipeline.execute(
-                self.answers("tool", tool="workspace", detail="3"),
-                {"agent": {"risk_threshold": "1.5"}})
+                self.answers("tool", tool="workspace"),
+                {"agent": {"risk_threshold": "1.5"}}, detail="3")
         self.assertEqual(out, "WORKSPACE 3")
         r.assert_called_once_with("workspace", "3", mock.ANY, None)
 
@@ -77,27 +76,29 @@ class TestRouteDispatch(unittest.TestCase):
         with mock.patch.object(agents, "spawn",
                                return_value="SPAWNED x") as s:
             out = pipeline.execute(
-                self.answers("agent", detail="fix tests"),
-                {"agent": {"risk_threshold": "1.5"}})
+                self.answers("agent"),
+                {"agent": {"risk_threshold": "1.5"}}, detail="fix tests")
         self.assertEqual(out, "SPAWNED x")
         s.assert_called_once_with("fix tests", mock.ANY)
 
     def test_answer_route(self):
         out = pipeline.execute(
-            self.answers("answer", detail="you can say open discord"),
-            {"agent": {"risk_threshold": "1.5"}})
+            self.answers("answer"),
+            {"agent": {"risk_threshold": "1.5"}},
+            detail="you can say open discord")
         self.assertEqual(out, "ANSWERED")
 
     def test_shell_tool_blocked_by_default(self):
         out = pipeline.execute(
-            self.answers("tool", tool="shell", detail="ls -la"),
-            {"agent": {"risk_threshold": "1.5"}})
+            self.answers("tool", tool="shell"),
+            {"agent": {"risk_threshold": "1.5"}}, detail="ls -la")
         self.assertIn("allow_shell", out)
 
     def test_shell_tool_denylist_refused(self):
         out = pipeline.execute(
-            self.answers("tool", tool="shell", detail="rm -rf /"),
-            {"agent": {"risk_threshold": "1.5", "allow_shell": "true"}})
+            self.answers("tool", tool="shell"),
+            {"agent": {"risk_threshold": "1.5", "allow_shell": "true"}},
+            detail="rm -rf /")
         self.assertTrue(out.startswith("REFUSED"))
 
     def test_shell_tool_runs_when_allowed(self):
@@ -105,15 +106,15 @@ class TestRouteDispatch(unittest.TestCase):
             r.return_value = mock.Mock(returncode=0, stdout="ok",
                                        stderr="")
             out = pipeline.execute(
-                self.answers("tool", tool="shell", detail="ls"),
+                self.answers("tool", tool="shell"),
                 {"agent": {"risk_threshold": "1.5",
-                           "allow_shell": "true"}})
+                           "allow_shell": "true"}}, detail="ls")
         self.assertIn("SHELL", out)
 
     def test_risk_blocks_before_route(self):
         out = pipeline.execute(
-            self.answers("tool", tool="shell", detail="ls", risk=2.5),
-            {"agent": {"risk_threshold": "1.5"}})
+            self.answers("tool", tool="shell", risk=2.5),
+            {"agent": {"risk_threshold": "1.5"}}, detail="ls")
         self.assertTrue(out.startswith("BLOCKED"))
 
     def test_legacy_launch_still_works(self):

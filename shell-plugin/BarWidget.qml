@@ -77,14 +77,14 @@ Panel {
 
   ColumnLayout {
     anchors.fill: parent
-    anchors.margins: Style.marginLarge
-    spacing: Style.marginMedium
+    anchors.margins: Style.spacing.panelPadding
+    spacing: Style.spacing.md
 
     Text {
       text: "Dim — " + root.status
       color: root.stateColor
       font.family: root.fontFamily
-      font.pixelSize: Style.font.large
+      font.pixelSize: Style.font.title
       font.bold: true
     }
 
@@ -93,7 +93,7 @@ Panel {
       text: "heard: " + root.transcript
       color: root.fg
       font.family: root.fontFamily
-      font.pixelSize: Style.font.normal
+      font.pixelSize: Style.font.body
       wrapMode: Text.WordWrap
       Layout.fillWidth: true
     }
@@ -103,7 +103,7 @@ Panel {
       text: root.answer
       color: root.accent
       font.family: root.fontFamily
-      font.pixelSize: Style.font.normal
+      font.pixelSize: Style.font.body
       wrapMode: Text.WordWrap
       Layout.fillWidth: true
     }
@@ -113,7 +113,7 @@ Panel {
       text: root.result
       color: root.dim
       font.family: root.fontFamily
-      font.pixelSize: Style.font.small
+      font.pixelSize: Style.font.bodySmall
       wrapMode: Text.WordWrap
       Layout.fillWidth: true
     }
@@ -121,7 +121,7 @@ Panel {
     Flow {
       visible: root.choices.length > 0
       Layout.fillWidth: true
-      spacing: Style.marginSmall
+      spacing: Style.spacing.sm
 
       Repeater {
         model: root.choices
@@ -142,7 +142,7 @@ Panel {
       }
       color: root.dim
       font.family: root.fontFamily
-      font.pixelSize: Style.font.small
+      font.pixelSize: Style.font.bodySmall
       wrapMode: Text.WordWrap
       Layout.fillWidth: true
     }
