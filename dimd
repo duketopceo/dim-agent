@@ -21,6 +21,9 @@ def _handler(st: state_mod.State, cfg: dict, ctl: dict) -> callable:
     def handle(cmd: dict) -> dict:
         c = cmd.get("cmd")
         if c == "status":
+            from dim import agents
+            st.tasks = agents.tasks()
+            st.transition(st.status)
             return {"ok": True, "state": st.snapshot()}
         if c == "listen":
             if ctl["busy"].is_set():
@@ -33,6 +36,12 @@ def _handler(st: state_mod.State, cfg: dict, ctl: dict) -> callable:
             ctl["choice_pick"] = cmd.get("pick", "")
             ctl["choice_event"].set()
             return {"ok": True}
+        if c == "task_status":
+            from dim import agents
+            return {"ok": True, "result": agents.status(cmd.get("name", ""))}
+        if c == "task_cancel":
+            from dim import agents
+            return {"ok": True, "result": agents.cancel(cmd.get("name", ""))}
         if c == "stop":
             ctl["stop"].set()
             return {"ok": True}

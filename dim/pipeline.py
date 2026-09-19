@@ -21,6 +21,22 @@ from datetime import datetime, timezone
 from . import config
 
 JEV_QUESTIONS = {
+    "route": {
+        "type": "choice",
+        "instructions": "What kind of request is this?",
+        "criteria": {
+            "launch": "open, start, or close an application",
+            "tool": "a desktop/system action — window ops, workspace "
+                    "switch, type text, screenshot, notify, run a command, "
+                    "find files",
+            "agent": "spawn a background agent for a coding, research, or "
+                     "multi-step task — phrases like 'agent', 'have an "
+                     "agent', 'spawn', 'delegate'",
+            "answer": "the user is asking a question or chatting — "
+                      "respond in text, no desktop action",
+            "clarify": "the request is too ambiguous to act on",
+        },
+    },
     "app": {
         "type": "choice",
         "instructions": "Which application is the user asking about? "
@@ -54,6 +70,19 @@ JEV_QUESTIONS = {
         "type": "score",
         "instructions": "0 read-only launch, 2 mutating",
         "criteria": ["read-only", "navigational", "mutating"],
+    },
+    "tool": {
+        "type": "choice",
+        "instructions": "Which tool should run? Only relevant when the "
+                        "route is 'tool'.",
+        "criteria": {},  # filled from the registry in build_questions
+    },
+    "detail": {
+        "type": "text",
+        "instructions": "The argument or payload for the request: the tool "
+                        "argument (workspace number, text to type, command, "
+                        "search pattern), the agent task description, or the "
+                        "text answer for the user. Empty when not needed.",
     },
 }
 
@@ -155,10 +184,13 @@ def transcribe(wav: pathlib.Path, cfg: dict) -> str:
 
 
 def build_questions(harness: dict | None) -> dict:
-    """Jev questions with the app catalog rebuilt from the local harness."""
-    if not harness or not harness.get("apps"):
-        return JEV_QUESTIONS
+    """Jev questions with the app catalog rebuilt from the local harness
+    and the tool list filled from the registry."""
+    from . import tools
     q = json.loads(json.dumps(JEV_QUESTIONS))
+    q["tool"]["criteria"] = tools.describe()
+    if not harness or not harness.get("apps"):
+        return q
     criteria = {
         name: f"{a.get('cues', name)}"
         + (f" (frequently used: {a['seen']}x)" if a.get("seen", 0) >= 5 else "")
@@ -211,37 +243,40 @@ def is_low_confidence(answers: dict, cfg: dict) -> bool:
 
 
 def execute(answers: dict, cfg: dict, harness: dict | None = None) -> str:
-    apps = dict(cfg.get("apps", {}))
-    if harness:
-        apps.update({n: a["launch"] for n, a in harness.get("apps", {}).items()
-                     if a.get("launch")})
-    agent = cfg.get("agent", {})
-    threshold = float(agent.get("risk_threshold", "1.5"))
+    """Route-aware dispatch. Falls back to the legacy action-based path
+    when Jev's response lacks the route question."""
+    from . import agents, tools
+    route = answers.get("route", {}).get("choice")
     action = answers.get("action", {}).get("choice")
     app = answers.get("app", {}).get("choice")
+    detail = _detail(answers)
     risk = float(answers.get("risk", {}).get("score", 2))
+    threshold = float(cfg.get("agent", {}).get("risk_threshold", "1.5"))
 
-    if action == "answer" or app == "none":
-        return "ANSWERED"
     if risk > threshold:
         return f"BLOCKED (risk={risk:.2f} > {threshold})"
-    if action != "launch":
-        return f"SKIP (action={action!r} not auto-executed)"
-    binname = apps.get(app)
-    if not binname:
-        return f"SKIP (unknown app {app!r})"
-    binary = binname.split()[0]
-    if not (shutil.which(binary)
-            or (config.HOME / ".local" / "bin" / binary).exists()):
-        return f"SKIP ({app} -> {binary!r} not installed)"
-    # Hyprland 0.56: hyprctl dispatch exec <cmd> hits a Lua parse bug
-    # (hyprwm/Hyprland#16224); the working path is the Lua dispatcher.
-    r = subprocess.run(["hyprctl", "eval", f'hl.dsp.exec_cmd("{binname}")'],
-                       capture_output=True, text=True, env=hypr_env())
-    if r.returncode != 0 or "ok" not in r.stdout:
-        subprocess.run(["hyprctl", "dispatch", "exec", binname],
-                       capture_output=True, env=hypr_env())
-    return f"LAUNCHED {app} -> {binname}"
+
+    if route == "agent":
+        return agents.spawn(detail or app or "unnamed task", cfg)
+    if route == "tool":
+        tool_name = answers.get("tool", {}).get("choice", "")
+        if tools.risk_of(tool_name) == "safe" or risk <= threshold:
+            return tools.run(tool_name, detail, cfg, harness)
+        return f"BLOCKED (tool {tool_name!r} needs confirmation)"
+    if route == "answer" or action == "answer" or app == "none":
+        return "ANSWERED"
+    if route == "launch" or action == "launch":
+        return tools.run("launch", app, cfg, harness)
+    if action in tools.REGISTRY:
+        return tools.run(action, detail, cfg, harness)
+    return f"SKIP (route={route!r} action={action!r} unhandled)"
+
+
+def _detail(answers: dict) -> str:
+    d = answers.get("detail", {})
+    if isinstance(d, dict):
+        return str(d.get("text") or d.get("value") or d.get("answer") or "")
+    return str(d) if d else ""
 
 
 def log_decision(record_dict: dict, log_file=config.DECISIONS) -> None:
@@ -300,9 +335,11 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
             state.transition("done", result="heard nothing")
             notify("heard nothing")
             return 0
-        harness = config.load_harness()
+        from .tools import adapters
+        harness = {"apps": adapters.best_catalog(),
+                   "context": adapters.context()}
         win = active_window()
-        context = (harness or {}).get("context", "")
+        context = harness.get("context", "")
         if win.get("title"):
             context += f"\nActive window: {win['class']} — {win['title']}"
         resp = ask_jev(text, model, build_questions(harness), context=context)
@@ -331,7 +368,12 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
             answers = corrected
         state.transition("acting")
         result = execute(answers, cfg, harness)
-        state.transition("done", result=result)
+        if result == "ANSWERED":
+            reply = _detail(answers) or text
+            state.transition("done", result=result, answer=reply)
+            speak(reply, cfg)
+        else:
+            state.transition("done", result=result)
         notify(result)
         log_decision({"ts": datetime.now(timezone.utc).isoformat(),
                       "transcript": text, "answers": answers, "result": result,
