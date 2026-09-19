@@ -215,9 +215,16 @@ def main() -> int:
         except (ConnectionError, OSError) as e:
             print(f"dimd unreachable: {e}", file=sys.stderr)
             return 1
+    if cmd == "choice":
+        try:
+            ipc.send({"cmd": "choice", "pick": sys.argv[2] if len(sys.argv) > 2 else ""})
+            return 0
+        except (ConnectionError, OSError) as e:
+            print(f"dimd unreachable: {e}", file=sys.stderr)
+            return 1
     if cmd == "harness":
         return rebuild_harness()
-    print("usage: dimd [daemon|install|trigger|status|stop|harness]")
+    print("usage: dimd [daemon|install|trigger|status|stop|choice|harness]")
     return 2
 
 
