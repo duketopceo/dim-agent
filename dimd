@@ -222,6 +222,11 @@ def main() -> int:
         except (ConnectionError, OSError) as e:
             print(f"dimd unreachable: {e}", file=sys.stderr)
             return 1
+    if cmd == "learn":
+        from dim import learn
+        out = learn.weekly()
+        print(out if out else "no corrections this week — nothing to propose")
+        return 0
     if cmd == "harness":
         return rebuild_harness()
     print("usage: dimd [daemon|install|trigger|status|stop|choice|harness]")

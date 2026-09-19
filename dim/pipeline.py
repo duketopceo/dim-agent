@@ -189,7 +189,9 @@ def build_questions(harness: dict | None) -> dict:
     from . import tools
     q = json.loads(json.dumps(JEV_QUESTIONS))
     q["tool"]["criteria"] = tools.describe()
+    from . import learn
     if not harness or not harness.get("apps"):
+        q["app"]["criteria"] = learn.apply_overrides(q["app"]["criteria"])
         return q
     criteria = {
         name: f"{a.get('cues', name)}"
@@ -198,6 +200,8 @@ def build_questions(harness: dict | None) -> dict:
     }
     criteria["none"] = JEV_QUESTIONS["app"]["criteria"]["none"]
     q["app"]["criteria"] = criteria
+    from . import learn
+    q["app"]["criteria"] = learn.apply_overrides(q["app"]["criteria"])
     return q
 
 
@@ -354,6 +358,8 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
                 state.transition("acting", choices=[])
                 if picked:
                     corrected = apply_choice(answers, picked)
+                    from . import learn
+                    learn.record_correction(text, picked, answers)
             else:
                 corrected = _gtk_choice(answers, cfg)
         if low_conf and not corrected:
