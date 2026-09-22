@@ -6,6 +6,7 @@ U2 replaces the flat app/action questions with the route schema; the
 confidence policy here already implements gate-on-target (launch executes
 when app confidence is high even if action confidence is low).
 """
+import base64
 import json
 import os
 import pathlib
@@ -76,6 +77,12 @@ JEV_QUESTIONS = {
         "instructions": "Which tool should run? Only relevant when the "
                         "route is 'tool'.",
         "criteria": {},  # filled from the registry in build_questions
+    },
+    "needs_screen": {
+        "type": "noul",
+        "instructions": "Does fulfilling this request require seeing what "
+                        "is on the screen — reading an error, describing a "
+                        "window, referencing visible content?",
     },
 }
 
@@ -229,6 +236,76 @@ def ask_jev(transcript: str, model: str, questions: dict,
             from None
 
 
+def ask_chat(transcript: str, cfg: dict, session_text: str = "",
+             image_b64: str | None = None) -> str:
+    """Real answer via an OpenRouter chat model. Jev routes; this answers.
+    image_b64 attaches a screenshot for screen-aware replies."""
+    model = cfg.get("agent", {}).get("answer_model",
+                                    "openai/gpt-4.1-mini")
+    system = ("You are Dim, a terse desktop voice assistant on Linux. "
+              "Answer in one or two short sentences, plain speech, no "
+              "markdown. If a screenshot is attached, describe what is "
+              "relevant to the question.")
+    user_content = transcript
+    if image_b64:
+        user_content = [
+            {"type": "text", "text": transcript},
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+        ]
+    messages = [{"role": "system", "content": system}]
+    if session_text:
+        messages.append({"role": "system",
+                         "content": f"Recent conversation:\n{session_text}"})
+    messages.append({"role": "user", "content": user_content})
+    payload = {"model": model, "messages": messages, "max_tokens": 300}
+    req = urllib.request.Request(
+        config.CHAT_ENDPOINT, data=json.dumps(payload).encode(),
+        headers={
+            "Authorization": f"Bearer {config.load_api_key()}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/duketopceo/dim-agent",
+            "X-Title": "Dim",
+        }, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read())
+    return (data.get("choices") or [{}])[0].get("message", {}) \
+        .get("content", "").strip()
+
+
+def capture_screen() -> pathlib.Path | None:
+    """grim the focused output to RUN_DIR/screen.png. None on failure."""
+    grim = shutil.which("grim")
+    if not grim:
+        return None
+    out = config.RUN_DIR / "screen.png"
+    try:
+        config.RUN_DIR.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run([grim, str(out)], capture_output=True,
+                           timeout=10, env=hypr_env())
+        return out if r.returncode == 0 and out.exists() else None
+    except Exception:
+        return None
+
+
+def screen_b64(cfg: dict, answers: dict) -> str | None:
+    """Attach a screenshot when Jev flags needs_screen or the answer route
+    fires — unless screenshots are disabled in config."""
+    if cfg.get("agent", {}).get("screenshots", "true") != "true":
+        return None
+    needs = answers.get("needs_screen", {}).get("noul", 0)
+    route = answers.get("route", {}).get("choice")
+    if needs < 0.7 and route != "answer":
+        return None
+    png = capture_screen()
+    if not png:
+        return None
+    try:
+        return base64.b64encode(png.read_bytes()).decode()
+    finally:
+        png.unlink(missing_ok=True)
+
+
 def is_low_confidence(answers: dict, cfg: dict) -> bool:
     """Gate on app/target confidence — action confidence no longer kills
     correct launches (the 'retro-large' bug). Launch is a whitelisted
@@ -322,20 +399,15 @@ def apply_choice(answers: dict, picked: str) -> dict:
 def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
     """One push-to-talk cycle inside the daemon.
 
-    `wait_for_choice(timeout)` -> picked label or None; injected so U5 can
-    swap the GTK overlay path for IPC choices without touching this flow.
-    Defaults to the legacy GTK button overlay.
+    `wait_for_choice(timeout)` -> picked label or None; injected by the
+    daemon so ambiguous turns resolve via IPC/widget clicks. With no
+    chooser wired, low-confidence turns cancel rather than guess.
     """
     secs = int(cfg.get("audio", {}).get("seconds", "5"))
     model = cfg.get("agent", {}).get("model", "typesafe/jev-1.13")
-    overlay = None
     try:
         state.transition("listening", transcript="", result="", answer="",
                          choices=[], error="")
-        if config.OVERLAY_BIN.exists():
-            overlay = subprocess.Popen([str(config.OVERLAY_BIN)], env=hypr_env(),
-                                       stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL)
         wav = record(secs, state)
         state.transition("transcribing")
         text = transcribe(wav, cfg)
@@ -351,6 +423,11 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
         context = harness.get("context", "")
         if win.get("title"):
             context += f"\nActive window: {win['class']} — {win['title']}"
+        from . import session
+        n_turns = int(cfg.get("agent", {}).get("session_turns", "8"))
+        session_text = session.as_text(session.tail(n_turns))
+        if session_text:
+            context += f"\nRecent conversation:\n{session_text}"
         resp = ask_jev(text, model, build_questions(harness), context=context)
         answers = resp.get("answers", {})
         low_conf = is_low_confidence(answers, cfg)
@@ -365,8 +442,6 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
                     corrected = apply_choice(answers, picked)
                     from . import learn
                     learn.record_correction(text, picked, answers)
-            else:
-                corrected = _gtk_choice(answers, cfg)
         if low_conf and not corrected:
             result = "CANCELLED (low confidence, no pick made)"
             state.transition("done", result=result)
@@ -379,12 +454,20 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
             answers = corrected
         state.transition("acting")
         result = execute(answers, cfg, harness, detail=text)
+        reply = ""
         if result == "ANSWERED":
-            reply = answer_text(text)
+            try:
+                reply = ask_chat(text, cfg, session_text,
+                                 image_b64=screen_b64(cfg, answers))
+            except Exception as e:
+                result = f"ANSWER_FAILED ({e})"
+                reply = answer_text(text)
             state.transition("done", result=result, answer=reply)
             speak(reply, cfg)
         else:
             state.transition("done", result=result)
+        session.append_turn(text, route=answers.get("route", {})
+                            .get("choice", ""), reply=reply, result=result)
         notify(result)
         log_decision({"ts": datetime.now(timezone.utc).isoformat(),
                       "transcript": text, "answers": answers, "result": result,
@@ -396,22 +479,5 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     finally:
-        if overlay:
-            overlay.terminate()
         if state:
             state.set_level(0.0)
-
-
-def _gtk_choice(answers: dict, cfg: dict) -> dict | None:
-    """Legacy path: ambiguous choices as clickable GTK overlay buttons."""
-    labels = ambiguous_choices(answers, cfg)
-    if not labels:
-        return None
-    try:
-        r = subprocess.run([str(config.OVERLAY_BIN), "--buttons"] + labels,
-                           capture_output=True, text=True, timeout=60,
-                           env=hypr_env())
-    except Exception:
-        return None
-    picked = r.stdout.strip()
-    return apply_choice(answers, picked) if picked else None

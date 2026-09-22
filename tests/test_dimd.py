@@ -134,13 +134,6 @@ class TestChoiceFlow(unittest.TestCase):
         self.assertEqual(out["app"]["choice"], "browser")
         self.assertTrue(out["corrected_by_user"])
 
-    def test_gtk_choice_cancel_returns_none(self):
-        picked = mock.Mock(returncode=0, stdout="")
-        with mock.patch.object(pipeline.subprocess, "run",
-                               return_value=picked):
-            self.assertIsNone(pipeline._gtk_choice(self.answers(), {}))
-
-
 class TestLogDecision(unittest.TestCase):
     def test_appends_jsonl(self):
         with tempfile.TemporaryDirectory() as td:

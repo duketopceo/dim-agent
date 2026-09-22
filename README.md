@@ -17,6 +17,13 @@ your Omarchy bar.
   `agent`, `answer`, or `clarify` — questions get text answers, not
   forced actions. The confidence gate keys on the *target* (app/tool)
   so a hesitant action score never cancels a correct launch.
+- **Real answers**: the `answer` route calls an OpenRouter chat model
+  (`answer_model`, vision-capable) — with a `grim` screenshot attached
+  when Jev flags `needs_screen`, so "what's this error?" works. Set
+  `screenshots = false` to keep images local.
+- **Session memory**: turns persist to `session.jsonl` and the last N
+  (`session_turns`, default 8) feed Jev + the answer model — "repeat
+  that" and "yes, do it" follow-ups work across restarts.
 - **Toolbelt**: launch/focus/close apps, workspace switch, notify,
   screenshot (`grim`), type text (`wtype`), guarded shell, file search —
   each with a risk tier (`safe` runs, `mutating` confirms, `shell`
@@ -95,6 +102,7 @@ app→command map.
 
 ## Data files (local, never committed)
 
+- `~/.local/share/dim-agent/session.jsonl` — persistent conversation turns
 - `~/.local/share/dim-agent/decisions.jsonl` — every decision + result
 - `~/.local/share/dim-agent/corrections.jsonl` — your clarify picks
 - `~/.local/share/dim-agent/tasks.jsonl` + `tasks/<id>.log` — agent registry
@@ -107,7 +115,7 @@ app→command map.
 ## Development
 
 ```sh
-python3 -m unittest discover -s tests -v   # 51 headless tests
+python3 -m unittest discover -s tests -v   # 65 headless tests
 python3 -m py_compile dimd dim/*.py dim/tools/*.py
 ```
 

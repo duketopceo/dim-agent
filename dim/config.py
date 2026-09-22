@@ -14,14 +14,15 @@ RUN_DIR = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid(
 LEVEL_FILE = RUN_DIR / "level"
 STATE_FILE = RUN_DIR / "state.json"
 SOCK_FILE = RUN_DIR / "dimd.sock"
+SESSION_FILE = DATA_DIR / "session.jsonl"
 TASKS_FILE = DATA_DIR / "tasks.jsonl"
 TASK_LOGS = DATA_DIR / "tasks"
 HARNESS_FILE = CFG_DIR / "harness.json"
 WHISPER_HOME = HOME / "src" / "whisper.cpp"
 WHISPER_BIN = WHISPER_HOME / "build" / "bin" / "whisper-cli"
-OVERLAY_BIN = HOME / ".local" / "opt" / "dim-agent" / "dim-overlay"
 
 JEV_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
+CHAT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 
 DEFAULT_CONFIG = """\
 [hotkey]
@@ -37,6 +38,13 @@ whisper_model = "ggml-small.en.bin"
 
 [agent]
 model = "typesafe/jev-1.13"
+# OpenRouter chat model for the answer route — must accept image_url
+# content parts (vision-capable) for screen-aware answers.
+answer_model = "openai/gpt-4.1-mini"
+# number of prior turns fed back as context for follow-ups
+session_turns = 8
+# attach a screenshot to answer-route calls when true
+screenshots = true
 # Auto-execute when risk <= threshold. Measured Jev scores: "open terminal"
 # launch scores ~1.2 (navigational band), so 1.5 = launch/close allowed,
 # mutating (>=2) always requires explicit confirmation.
@@ -64,7 +72,10 @@ def _default_cfg_dict() -> dict:
         "hotkey": {"mod": "SUPER", "key": "D"},
         "audio": {"seconds": "5", "whisper_model": "ggml-small.en.bin"},
         "agent": {
-            "model": "typesafe/jev-1.13", "risk_threshold": "1.5",
+            "model": "typesafe/jev-1.13",
+            "answer_model": "openai/gpt-4.1-mini",
+            "session_turns": "8", "screenshots": "true",
+            "risk_threshold": "1.5",
             "confidence_instant": "0.95", "confidence_ambiguous": "0.8",
         },
         "voice": {"enabled": "false"},
