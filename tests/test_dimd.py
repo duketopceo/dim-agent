@@ -47,7 +47,8 @@ class TestExecute(unittest.TestCase):
                 "risk": {"score": risk}}
 
     def test_blocks_high_risk(self):
-        out = pipeline.execute(self.answers(risk=2.0), self.cfg)
+        out = pipeline.execute(self.answers(action="type_text", risk=2.0),
+                               self.cfg)
         self.assertTrue(out.startswith("BLOCKED"))
 
     def test_launch_route_not_risk_gated(self):
