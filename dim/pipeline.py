@@ -329,7 +329,11 @@ def execute(answers: dict, cfg: dict, harness: dict | None = None,
     risk = float(answers.get("risk", {}).get("score", 2))
     threshold = float(cfg.get("agent", {}).get("risk_threshold", "1.5"))
 
-    if risk > threshold:
+    # Risk gate applies to mutating work — a plain app launch or a text
+    # answer is never blocked on risk (Jev's score band for launches
+    # straddles the navigational/mutating line: "open discord" ~1.6).
+    gated = route not in ("launch", "answer") and action not in ("launch", "answer")
+    if gated and risk > threshold:
         return f"BLOCKED (risk={risk:.2f} > {threshold})"
 
     if route == "agent":

@@ -50,6 +50,15 @@ class TestExecute(unittest.TestCase):
         out = pipeline.execute(self.answers(risk=2.0), self.cfg)
         self.assertTrue(out.startswith("BLOCKED"))
 
+    def test_launch_route_not_risk_gated(self):
+        # "open discord" scored risk 1.6 live — launches are never blocked
+        from dim import tools
+        with mock.patch.object(tools, "run", return_value="LAUNCHED"):
+            out = pipeline.execute(
+                self.answers(action="launch", app="browser", risk=2.5),
+                self.cfg)
+        self.assertEqual(out, "LAUNCHED")
+
     def test_skips_non_launch(self):
         out = pipeline.execute(self.answers(action="bogus"), self.cfg)
         self.assertTrue(out.startswith("SKIP"))
