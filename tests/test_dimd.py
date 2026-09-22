@@ -51,8 +51,15 @@ class TestExecute(unittest.TestCase):
         self.assertTrue(out.startswith("BLOCKED"))
 
     def test_skips_non_launch(self):
-        out = pipeline.execute(self.answers(action="close"), self.cfg)
+        out = pipeline.execute(self.answers(action="bogus"), self.cfg)
         self.assertTrue(out.startswith("SKIP"))
+
+    def test_close_dispatches_tool(self):
+        from dim import tools
+        with mock.patch.object(tools, "run", return_value="CLOSED") as r:
+            out = pipeline.execute(self.answers(action="close"), self.cfg)
+        self.assertEqual(out, "CLOSED")
+        r.assert_called_once()
 
     def test_answer_route_never_executes(self):
         out = pipeline.execute(self.answers(action="answer", app="none"),
