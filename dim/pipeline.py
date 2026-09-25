@@ -33,6 +33,9 @@ JEV_QUESTIONS = {
             "agent": "spawn a background agent for a coding, research, or "
                      "multi-step task — phrases like 'agent', 'have an "
                      "agent', 'spawn', 'delegate'",
+            "act": "a multi-step desktop task — do several things, or "
+                   "imperative instructions like 'open X and go to "
+                   "workspace 2' or 'type this into the window'",
             "answer": "the user is asking a question or chatting — "
                       "respond in text, no desktop action",
             "clarify": "the request is too ambiguous to act on",
@@ -317,7 +320,7 @@ def is_low_confidence(answers: dict, cfg: dict) -> bool:
 
 
 def execute(answers: dict, cfg: dict, harness: dict | None = None,
-            detail: str = "") -> str:
+            detail: str = "", state=None, confirm=None) -> str:
     """Route-aware dispatch. Falls back to the legacy action-based path
     when Jev's response lacks the route question. Jev only answers typed
     questions (noul/choice/score) — free-text args come from the
@@ -338,6 +341,10 @@ def execute(answers: dict, cfg: dict, harness: dict | None = None,
 
     if route == "agent":
         return agents.spawn(detail or app or "unnamed task", cfg)
+    if route == "act":
+        from . import act
+        return act.run_act_loop(detail, cfg, state=state,
+                                harness=harness, confirm=confirm)
     if route == "tool":
         tool_name = answers.get("tool", {}).get("choice", "")
         tier = tools.risk_of(tool_name)
@@ -409,12 +416,17 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
     """
     secs = int(cfg.get("audio", {}).get("seconds", "5"))
     model = cfg.get("agent", {}).get("model", "typesafe/jev-1.13")
+    t0 = time.monotonic()
+    timing = {}
     try:
         state.transition("listening", transcript="", result="", answer="",
                          choices=[], error="")
         wav = record(secs, state)
+        timing["record_ms"] = round((time.monotonic() - t0) * 1000)
         state.transition("transcribing")
         text = transcribe(wav, cfg)
+        timing["stt_ms"] = round((time.monotonic() - t0) * 1000
+                                 - timing["record_ms"])
         state.transition("deciding", transcript=text)
         if not text or "[BLANK" in text:
             state.transition("done", result="heard nothing")
@@ -433,6 +445,8 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
         if session_text:
             context += f"\nRecent conversation:\n{session_text}"
         resp = ask_jev(text, model, build_questions(harness), context=context)
+        timing["jev_ms"] = round((time.monotonic() - t0) * 1000
+                                 - timing["record_ms"] - timing["stt_ms"])
         answers = resp.get("answers", {})
         low_conf = is_low_confidence(answers, cfg)
         corrected = None
@@ -457,7 +471,16 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
         if corrected:
             answers = corrected
         state.transition("acting")
-        result = execute(answers, cfg, harness, detail=text)
+        confirm = None
+        if wait_for_choice:
+            def confirm(prompt: str) -> bool:
+                state.transition("awaiting_choice",
+                                 choices=[f"{prompt} — yes", "no"])
+                pick = wait_for_choice(30)
+                state.transition("acting", choices=[])
+                return bool(pick) and "yes" in pick
+        result = execute(answers, cfg, harness, detail=text,
+                         state=state, confirm=confirm)
         reply = ""
         if result == "ANSWERED":
             try:
@@ -473,12 +496,16 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
         session.append_turn(text, route=answers.get("route", {})
                             .get("choice", ""), reply=reply, result=result)
         notify(result)
+        timing["act_ms"] = round((time.monotonic() - t0) * 1000)
         log_decision({"ts": datetime.now(timezone.utc).isoformat(),
                       "transcript": text, "answers": answers, "result": result,
+                      "timing_ms": timing,
                       "corrected": bool(answers.get("corrected_by_user"))})
         return 0
     except Exception as e:
         state.transition("error", error=str(e))
+        log_decision({"ts": datetime.now(timezone.utc).isoformat(),
+                      "result": f"ERROR ({e})", "timing_ms": timing})
         notify(f"error: {e}")
         print(f"error: {e}", file=sys.stderr)
         return 1

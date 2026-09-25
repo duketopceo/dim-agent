@@ -40,7 +40,7 @@ whisper_model = "ggml-small.en.bin"
 model = "typesafe/jev-1.13"
 # OpenRouter chat model for the answer route — must accept image_url
 # content parts (vision-capable) for screen-aware answers.
-answer_model = "openai/gpt-4.1-mini"
+answer_model = "meta-llama/llama-4-maverick"
 # number of prior turns fed back as context for follow-ups
 session_turns = 8
 # attach a screenshot to answer-route calls when true
@@ -73,7 +73,7 @@ def _default_cfg_dict() -> dict:
         "audio": {"seconds": "5", "whisper_model": "ggml-small.en.bin"},
         "agent": {
             "model": "typesafe/jev-1.13",
-            "answer_model": "openai/gpt-4.1-mini",
+            "answer_model": "meta-llama/llama-4-maverick",
             "session_turns": "8", "screenshots": "true",
             "risk_threshold": "1.5",
             "confidence_instant": "0.95", "confidence_ambiguous": "0.8",

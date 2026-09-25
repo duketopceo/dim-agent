@@ -16,7 +16,7 @@
   "entryPoints": {
     "service": "DimService.qml",
     "barWidget": "BarWidget.qml",
-    "overlay": "DimOverlay.qml"
+    "overlay": "Companion.qml"
   },
   "barWidget": {
     "displayName": "Dim",

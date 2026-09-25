@@ -42,3 +42,32 @@ weekly human-gated learning loop, generic install. 54/54 tests pass.
 5. `needs_screen` context not wired; screenshot exists as a tool only.
 6. Branch `feat/dim-assistant` never merged — decide push/PR/merge on
    the new machine.
+
+## v0.1-usable update (2026-09-25)
+
+- Route set grew: `launch | tool | agent | act | answer | clarify`.
+  `act` = `dim/act.py` bounded tool-call loop (<=8 steps, >2 consecutive
+  failures aborts): chat model drives `tools.tool_schemas()` (derived
+  from the registry), every call re-passes denylist/allow_shell/confirm
+  gates — mutating calls surface as a yes/no choice via the existing IPC
+  choice path, skipped when no chooser wired.
+- Answer/agent default: `meta-llama/llama-4-maverick` (open-weights
+  flash). No GPT-6 Astra anywhere — forbidden by user.
+- `decisions.jsonl` records now carry `timing_ms`:
+  record/stt/jev/act — latency is measurable per stage.
+- All failures write `state.json` status=error + log to decisions.jsonl;
+  UI surfaces it.
+- Shell plugin overlay is now `Companion.qml` — persistent bottom-right
+  orb (idle/listening/thinking/acting/error colors, breathes while
+  listening), click expands a card with transcript/answer/choices.
+  `DimOverlay.qml` kept in repo but no longer the entry point.
+- 83/83 tests pass; daemon + plugin synced and live on omarchy-max
+  (summon returned ok, no QML errors).
+
+### Verified live
+- Jev routes "open discord and then go to workspace two" -> act (conf 1)
+
+### Still needs a real voice run (Super+D)
+- act route end-to-end with spoken phrase
+- yes/no confirm flow on a mutating tool call
+- orb error state on a deliberately failing route

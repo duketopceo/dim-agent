@@ -40,6 +40,34 @@ def describe() -> dict:
     return {name: desc for name, (_, _, desc) in REGISTRY.items()}
 
 
+def tool_schemas() -> list:
+    """OpenAI-style tool definitions derived from the registry — one
+    string arg per tool. Derived, not static, so new tools appear in the
+    act loop automatically."""
+    out = []
+    for name, (fn, tier, desc) in REGISTRY.items():
+        if fn is None and name not in ("agent_spawn", "task_status",
+                                       "task_cancel"):
+            continue
+        out.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": f"[{tier}] {desc}",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "arg": {"type": "string",
+                                "description": "the argument or payload "
+                                               "for this tool"}
+                    },
+                    "required": [],
+                },
+            },
+        })
+    return out
+
+
 def risk_of(name: str) -> str:
     entry = REGISTRY.get(name)
     return entry[1] if entry else "shell"
