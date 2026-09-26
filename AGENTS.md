@@ -18,8 +18,9 @@ python -m unittest discover -s tests -v
 CI matrix is Python 3.11 and 3.13; `requires-python = ">=3.11"`.
 
 **The default branch is `master`, not `main`.** `.github/workflows/test.yml`
-triggers on `branches: [master]`. A rename to `main` needs the workflow's
-trigger updated in the same change or CI silently stops running.
+has `push: branches: [master]` with an **unfiltered** `pull_request:` trigger.
+So a rename to `main` must update that `push` filter in the same change:
+without it, PRs still get CI but direct pushes to `main` run nothing at all.
 
 ## `dimd` and `dim-overlay` are extensionless scripts, on purpose
 
