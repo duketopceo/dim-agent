@@ -277,10 +277,18 @@ fn ask_chat(transcript: &str, cfg: &Cfg, session: &str,
         vec![]
     };
     let mut system = "You are Dim, a terse desktop voice assistant. Answer in \
-                  one or two short sentences, plain speech, no markdown. \
-                  If a screenshot is attached, describe what is relevant. \
-                  To point at a screen element, append [POINT:x,y:label]."
+                  one or two short sentences, plain speech, no markdown."
         .to_string();
+    if !img.is_empty() {
+        system.push_str(
+            " A screenshot of the user's screen is attached. Describe what \
+             is relevant to the question. When the user asks where \
+             something is or where to click, point at it: append one or \
+             more tags like [POINT:x,y:label] using the screenshot's pixel \
+             coordinates, or for a multi-step sequence \
+             [POINTS:[{\"x\":x,\"y\":y,\"label\":\"step\"}]]. Keep the \
+             spoken text free of the tags; they render as an overlay.");
+    }
     let block = memory::context_block("");
     if !block.is_empty() {
         system.push_str(&format!("\n\n{block}"));
@@ -410,7 +418,7 @@ pub fn run_listen(cfg: &Cfg, st: &Arc<State>, ctl: &ChoiceCtl,
         st.transition("listening", &[
             ("transcript", json!("")), ("result", json!("")),
             ("answer", json!("")), ("choices", json!([])),
-            ("error", json!(""))]);
+            ("points", json!([])), ("error", json!(""))]);
         let wav = record(cfg, st)?;
         timing.insert("record_ms".into(), json!(t0.elapsed().as_millis()));
         st.transition("transcribing", &[]);
@@ -562,8 +570,15 @@ pub fn run_listen(cfg: &Cfg, st: &Arc<State>, ctl: &ChoiceCtl,
                 Err(e) => (canned_reply(&text),
                            format!("ANSWER_FAILED ({e})")),
             };
+            let (reply, pts) = crate::points::extract(&reply);
+            let pts = if pts.is_empty() {
+                pts
+            } else {
+                crate::points::to_logical(&pts, &crate::points::monitors())
+            };
             st.transition("done", &[("result", json!(result.clone())),
-                                    ("answer", json!(reply.clone()))]);
+                                    ("answer", json!(reply.clone())),
+                                    ("points", json!(pts))]);
             if cfg.voice_out {
                 speak(&reply);
             }

@@ -8,6 +8,7 @@ mod ipc;
 mod learn;
 mod memory;
 mod pipeline;
+mod points;
 mod recall;
 mod session;
 mod skills;
@@ -326,5 +327,42 @@ mod tests {
         assert_eq!(crate::tools::risk_of("memory"), "mutating");
         assert_eq!(crate::tools::risk_of("recall"), "safe");
         assert_eq!(crate::tools::risk_of("nonexistent"), "shell");
+    }
+
+    #[test]
+    fn points_extract_and_map() {
+        use serde_json::json;
+        let (clean, pts) = crate::points::extract(
+            "Click it [POINT:100,200:OK button] now.");
+        assert!(!clean.contains("POINT"));
+        assert_eq!(pts[0]["x"], json!(100));
+        assert_eq!(pts[0]["label"], json!("OK button"));
+
+        let (_, pts) = crate::points::extract(
+            "Steps: [POINTS:[{\"x\":1,\"y\":2,\"label\":\"a\"},\
+             {\"x\":3,\"y\":4,\"label\":\"b\"}]]");
+        assert_eq!(pts.len(), 2);
+        assert_eq!(pts[1]["label"], json!("b"));
+
+        // unclosed POINTS stays visible (parity: same as Python)
+        let (clean, pts) = crate::points::extract("t [POINTS:not-json] m");
+        assert!(clean.contains("POINTS"));
+        assert!(pts.is_empty());
+
+        // scale-2 eDP-1 + scale-1 DP-3 at logical (1728,0); the overlap
+        // region [1728,3456) belongs to the later output (grim draws in
+        // order, last wins)
+        let mons = vec![
+            json!({"x":0,"y":0,"width":3456,"height":2160,"scale":2}),
+            json!({"x":1728,"y":0,"width":3440,"height":1440,"scale":1}),
+        ];
+        let out = crate::points::to_logical(
+            &[json!({"x":1000,"y":400,"label":""}),
+              json!({"x":2000,"y":50,"label":""}),
+              json!({"x":99999,"y":0,"label":""})], &mons);
+        assert_eq!(out[0]["x"], json!(500));
+        assert_eq!(out[0]["y"], json!(200));
+        assert_eq!(out[1]["x"], json!(2000));
+        assert_eq!(out[2]["x"], json!(99999));
     }
 }

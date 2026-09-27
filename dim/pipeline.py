@@ -252,8 +252,16 @@ def ask_chat(transcript: str, cfg: dict, session_text: str = "",
                                     "openai/gpt-4.1-mini")
     system = ("You are Dim, a terse desktop voice assistant on Linux. "
               "Answer in one or two short sentences, plain speech, no "
-              "markdown. If a screenshot is attached, describe what is "
-              "relevant to the question.")
+              "markdown.")
+    if image_b64:
+        system += (
+            " A screenshot of the user's screen is attached. Describe "
+            "what is relevant to the question. When the user asks where "
+            "something is or where to click, point at it: append one or "
+            "more tags like [POINT:x,y:label] using the screenshot's "
+            "pixel coordinates, or for a multi-step sequence "
+            "[POINTS:[{\"x\":x,\"y\":y,\"label\":\"step\"}]]. Keep the "
+            "spoken text free of the tags; they render as an overlay.")
     user_content = transcript
     if image_b64:
         user_content = [
@@ -286,7 +294,7 @@ def ask_chat(transcript: str, cfg: dict, session_text: str = "",
 
 
 def capture_screen() -> pathlib.Path | None:
-    """grim the focused output to RUN_DIR/screen.png. None on failure."""
+    """grim composites ALL outputs to RUN_DIR/screen.png. None on fail."""
     grim = shutil.which("grim")
     if not grim:
         return None
@@ -438,7 +446,7 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
     timing = {}
     try:
         state.transition("listening", transcript="", result="", answer="",
-                         choices=[], error="")
+                         choices=[], points=[], error="")
         wav = record(secs, state)
         timing["record_ms"] = round((time.monotonic() - t0) * 1000)
         state.transition("transcribing")
@@ -510,13 +518,20 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
                          state=state, confirm=confirm)
         reply = ""
         if result == "ANSWERED":
+            pts = []
             try:
                 reply = ask_chat(text, cfg, session_text,
                                  image_b64=screen_b64(cfg, answers))
             except Exception as e:
                 result = f"ANSWER_FAILED ({e})"
                 reply = answer_text(text)
-            state.transition("done", result=result, answer=reply)
+            if reply:
+                from . import points as _points
+                reply, raw = _points.extract(reply)
+                if raw:
+                    pts = _points.to_logical(raw, _points.monitors())
+            state.transition("done", result=result, answer=reply,
+                             points=pts)
             speak(reply, cfg)
         else:
             state.transition("done", result=result)

@@ -21,6 +21,8 @@ Item {
   property string answer: ""
   property string result: ""
   property var choices: []
+  property var points: []
+  property bool pointsVisible: false
   property real level: 0.0
   property string error: ""
 
@@ -66,6 +68,13 @@ Item {
         root.answer = s.answer || "";
         root.result = s.result || "";
         root.choices = s.choices || [];
+        var pts = s.points || [];
+        if (pts.length > 0 &&
+            JSON.stringify(pts) !== JSON.stringify(root.points)) {
+          root.points = pts;
+          root.pointsVisible = true;
+          pointsTimer.restart();
+        }
         root.level = s.level || 0.0;
         root.error = s.error || "";
       } catch (e) { root.status = "offline"; }
@@ -82,6 +91,72 @@ Item {
   Process {
     id: choiceProc
     command: ["dimd", "choice", ""]
+  }
+
+  // Point markers — logical coords straight from state.json (already
+  // normalized by the daemon). Auto-hide after 8s; markers are visual
+  // only (guidance, not control).
+  Timer {
+    id: pointsTimer
+    interval: 8000
+    onTriggered: root.pointsVisible = false
+  }
+
+  Repeater {
+    model: root.pointsVisible ? root.points : []
+    delegate: Item {
+      // clamp inside the surface so edge/overshoot coords stay visible
+      x: Math.max(16, Math.min(root.width - 16, modelData.x))
+      y: Math.max(16, Math.min(root.height - 16, modelData.y))
+      width: 0; height: 0
+
+      Rectangle {
+        id: marker
+        x: -14; y: -14
+        width: 28; height: 28; radius: 14
+        color: "transparent"
+        border.color: "#7aa2f7"
+        border.width: 3
+
+        SequentialAnimation on scale {
+          running: true
+          loops: Animation.Infinite
+          NumberAnimation { to: 1.2; duration: 600; easing.type: Easing.InOutSine }
+          NumberAnimation { to: 1.0; duration: 600; easing.type: Easing.InOutSine }
+        }
+
+        Text {
+          anchors.centerIn: parent
+          text: index + 1
+          color: "#7aa2f7"
+          font.pixelSize: 12
+          font.bold: true
+        }
+      }
+
+      Rectangle {
+        visible: (modelData.label || "").length > 0
+        x: 20; y: -12
+        width: lbl.implicitWidth + 14
+        height: 24
+        radius: 6
+        color: "#1a1b26"
+        border.color: "#3b4261"
+        Text {
+          id: lbl
+          anchors.centerIn: parent
+          text: modelData.label || ""
+          color: "#c0caf5"
+          font.pixelSize: 11
+        }
+      }
+
+      MouseArea {
+        x: -18; y: -18
+        width: 36; height: 36
+        onClicked: root.pointsVisible = false
+      }
+    }
   }
 
   // Orb
@@ -109,6 +184,22 @@ Item {
       text: "◉"
       font.pixelSize: 18
       color: "#c0caf5"
+    }
+
+    // pointer badge: dots when guidance markers are on screen
+    Rectangle {
+      visible: root.pointsVisible
+      anchors.top: parent.top
+      anchors.right: parent.right
+      width: 14; height: 14; radius: 7
+      color: "#7aa2f7"
+      Text {
+        anchors.centerIn: parent
+        text: root.points.length
+        color: "#1a1b26"
+        font.pixelSize: 9
+        font.bold: true
+      }
     }
 
     MouseArea {

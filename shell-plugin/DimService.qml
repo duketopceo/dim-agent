@@ -17,6 +17,7 @@ Item {
   property string answer: ""
   property string result: ""
   property var choices: []
+  property var points: []
   property real level: 0.0
   property var tasks: ({})
   property string error: ""
@@ -50,6 +51,7 @@ Item {
         root.answer = s.answer || "";
         root.result = s.result || "";
         root.choices = s.choices || [];
+        root.points = s.points || [];
         root.level = s.level || 0.0;
         root.tasks = s.tasks || {};
         root.error = s.error || "";

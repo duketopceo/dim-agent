@@ -30,6 +30,7 @@ impl State {
             g.entry(k).or_insert(json!(""));
         }
         g.entry("choices").or_insert(json!([]));
+        g.entry("points").or_insert(json!([]));
         g.entry("level").or_insert(json!(0.0));
         g.entry("tasks").or_insert(json!({}));
         g.insert("started_at".into(), json!(self.started_at));

@@ -52,7 +52,12 @@ settings page on top of this command.
 
 Status vocabulary is closed; shells must treat unknown statuses as
 `idle`-equivalent rather than failing. `points` may be absent/empty on
-older cores — default `[]`.
+older cores — default `[]`. Point fields: `x`,`y` are Hyprland logical
+coordinates (already normalized from screenshot pixels via monitor
+scale); `label` and `step` are optional strings/ints. The model emits
+them as `[POINT:x,y:label]` / `[POINTS:[{x,y,label}]]` tags in
+screenshot-pixel coords; the core strips tags from the displayed/
+spoken answer and publishes the normalized list.
 
 ## Data files (shared by both cores, never versioned differently)
 
