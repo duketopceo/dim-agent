@@ -101,6 +101,44 @@ quickshell plugin. Then macOS + Windows + generic Linux shells.
 - Companion.qml: add `speaking` state, waveform from `level`, point
   indicator badge when `state.json.points` non-empty.
 
+### Wave 2.5 — Memory + self-authored skills (Hermes pattern)
+
+**U5b: Curated memory layer**
+- `MEMORY.md` + `USER.md` in the data dir — bounded (~800/500 tok),
+  frozen-snapshot injection into every brain call's system context.
+- `memory` tool in the registry: `add | replace | remove`,
+  substring-matched (Hermes `memory_tool.py` semantics verbatim).
+- Python impl first (it ships in the live daemon today), then ported
+  with U2 parity work — the contract is file-level, so both cores can
+  share the same files.
+- Test: `tests/test_memory.py` — add/replace/remove round-trips, bound
+  enforcement, frozen-snapshot injection into `ask_chat` calls.
+
+**U5c: sqlite-vec recall store**
+- `~/.local/share/dim-agent/recall.db`: turns + corrections + distilled
+  notes embedded via a configurable embedding model (OpenRouter
+  embeddings default; `none` = lexical FTS5 fallback so recall works
+  fully offline without any key).
+- `recall` tool: `search <query>` → top-k injected context; automatic
+  write-through on every turn + correction.
+- Test: `tests/test_recall.py` — write-through, top-k ordering,
+  lexical fallback when no embedding provider configured.
+
+**U5d: Self-authored skills**
+- `~/.local/share/dim-agent/skills/*/SKILL.md` + `skill_manage` tool
+  (create/edit/patch/delete/write_file/remove_file — Hermes semantics)
+  + `skill_view` for progressive disclosure (index in system context,
+  bodies loaded on demand).
+- `learn` route/command: "Dim, learn X" → agent gathers material with
+  existing tools and authors a conforming SKILL.md; re-running on the
+  same topic folds into the existing skill.
+- Skills may declare toolbelt additions (name/description/script) that
+  register at daemon start — procedural memory becomes capability.
+- Mutating tier: skill writes hit the filesystem under the data dir —
+  safe tier for writes inside `skills/`, confirm for deletes.
+- Test: `tests/test_skills.py` — create/view/edit lifecycle, index
+  injection, toolbelt registration, learn-command fold-in.
+
 ### Wave 3 — Pluggable brains
 
 **U6: Brain provider trait + registry (Rust)**
@@ -166,7 +204,9 @@ quickshell plugin. Then macOS + Windows + generic Linux shells.
 ## Traceability
 
 - Requirements 1–7 ← U1 (contract), U2 (parity core incl. gates/errors),
-  U3 (points), U4 (TTS), U6 (brains), U7–U10 (multi-OS + packaging).
+  U3 (points), U4 (TTS), U5b–U5d (memory + skills), U6 (brains),
+  U7–U10 (multi-OS + packaging). Omarchy Linux is the primary/first
+  target — all Wayland decisions verified against Hyprland first.
 - Non-goals enforced: no proxy/hosted service anywhere; no wake word;
   no pixel clicking (only `[POINT]` guidance).
 - Forbidden: GPT-6 Astra never appears as a runtime or dev default.

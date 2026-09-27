@@ -109,6 +109,30 @@ macOS/Windows where they're mature.
 7. Open source, MIT or Apache-2.0; installable via package manager or
    single binary per OS.
 
+## Memory & self-authored skills (Hermes pattern)
+
+Day-to-day context survives restarts **without** a heavy service
+(Kurultai is too resource-hungry to be the default; it stays an optional
+external provider for users who want it):
+
+- **Bounded curated memory** — `MEMORY.md` (~800 tok: environment,
+  learned facts) + `USER.md` (~500 tok: preferences, style) in the data
+  dir, injected as a frozen block in every brain call's system context.
+  The agent curates it via a `memory` tool (add/replace/remove,
+  substring-matched). Frozen-snapshot pattern preserves prompt caching.
+- **Long-term recall** — `sqlite-vec` embedded store: turns, corrections,
+  and distilled notes vector-indexed in one `.db` file; retrieved into
+  context on demand. Zero servers. LanceDB is the escape hatch if the
+  corpus outgrows brute-force KNN.
+- **Self-authored skills** — `skills/*/SKILL.md` in the data dir +
+  a `skill_manage` tool (create/edit/patch/delete/write_file) +
+  `skill_view` for progressive disclosure. Successful approaches become
+  reusable skills; a `learn` route/command lets the user point Dim at
+  material ("learn how Omarchy plugin packaging works") and the agent
+  authors the skill. Skills may register new toolbelt entries.
+- Session turns (`session.jsonl`) stay the short-term layer; memory is
+  the curated layer on top.
+
 ## Explicit non-goals (for now)
 
 - No cloud proxy / hosted service — users bring keys or run local models.
@@ -117,6 +141,8 @@ macOS/Windows where they're mature.
 - Pixel-level computer-use clicking beyond `type_text`/hotkeys —
   cursor *pointing* yes, cursor *clicking* deferred (biggest risk surface).
 - Rowboat integration.
+- Kurultai as the default memory backend — optional provider only.
+- Cloud-synced memory — everything stays on-device in v1.
 
 ## Open questions for planning
 
