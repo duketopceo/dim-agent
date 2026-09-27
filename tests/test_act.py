@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, ".")
-from dim import act, tools  # noqa: E402
+from dim import act, session, tools  # noqa: E402
 
 
 def _msg(content=None, calls=None):
