@@ -87,6 +87,44 @@ class TestExecute(unittest.TestCase):
             out = pipeline.execute(self.answers(), self.cfg)
         self.assertIn("not installed", out)
 
+    def test_dictation_route_types_transcript(self):
+        from dim import tools
+        ans = {"route": {"choice": "dictation"},
+               "action": {"choice": ""}, "app": {"choice": "none"},
+               "risk": {"score": 1.0}}
+        with mock.patch.object(tools, "run", return_value="TYPED") as r:
+            out = pipeline.execute(ans, self.cfg,
+                                   detail="dictate hello there")
+        self.assertEqual(out, "TYPED")
+        r.assert_called_once_with("type_text", "hello there", self.cfg)
+
+    def test_dictation_not_risk_gated(self):
+        # dictation is self-confirming: transcript is the user's own
+        # instruction — high Jev risk score must not block it
+        from dim import tools
+        ans = {"route": {"choice": "dictation"},
+               "action": {"choice": ""}, "app": {"choice": "none"},
+               "risk": {"score": 2.0}}
+        with mock.patch.object(tools, "run", return_value="TYPED") as r:
+            out = pipeline.execute(ans, self.cfg, detail="dictate x")
+        self.assertEqual(out, "TYPED")
+        r.assert_called_once()
+
+    def test_dictation_text_strips_prefix(self):
+        cases = {
+            "dictate hello": "hello",
+            "Dictate: buy milk": "buy milk",
+            "please type this, ok": "ok",
+            "take dictation meeting notes": "meeting notes",
+            "write this down - the thing": "the thing",
+            "typesetter is an app": "typesetter is an app",
+            "dictated": "dictated",
+            "dictate": "dictate",  # prefix-only → keep original
+            "hello world": "hello world",
+        }
+        for raw, want in cases.items():
+            self.assertEqual(pipeline.dictation_text(raw), want, raw)
+
     def test_launch_uses_lua_dispatcher(self):
         ok = mock.Mock(returncode=0, stdout="ok")
         with mock.patch.object(pipeline.shutil, "which",
