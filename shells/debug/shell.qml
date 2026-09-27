@@ -448,6 +448,7 @@ FloatingWindow {
               ["stt.base_url", "stt base url (groq/openai/vllm)"],
               ["stt.model", "stt model"],
               ["stt.key_env", "stt api key env var"],
+              ["stt.prompt", "stt vocab priming (names/jargon)"],
               ["audio.seconds", "record seconds"],
               ["agent.risk_threshold", "risk threshold"],
               ["agent.allow_shell", "allow_shell (true|false)"],

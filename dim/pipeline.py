@@ -204,6 +204,10 @@ def _transcribe_openai(wav: pathlib.Path, stt: dict) -> str:
         b"",
         stt.get("model", "whisper-large-v3-turbo").encode(),
         f"--{boundary}".encode(),
+        b'Content-Disposition: form-data; name="prompt"',
+        b"",
+        stt.get("prompt", "").encode(),
+        f"--{boundary}".encode(),
         b'Content-Disposition: form-data; name="file"; '
         b'filename="utterance.wav"',
         b"Content-Type: audio/wav",
