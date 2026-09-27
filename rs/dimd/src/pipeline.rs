@@ -197,7 +197,56 @@ fn record(cfg: &Cfg, st: &Arc<State>) -> Result<std::path::PathBuf, String> {
     }
 }
 
+/// OpenAI-compatible /audio/transcriptions — Groq, OpenAI, vLLM, etc.
+/// Key comes from .env/env via stt.key_env (parity with
+/// _transcribe_openai).
+fn transcribe_openai(wav: &std::path::Path, cfg: &Cfg)
+                     -> Result<String, String> {
+    let key = crate::config::env_key(&cfg.stt_key_env)
+        .ok_or_else(|| format!("no {} in .env or environment",
+                               cfg.stt_key_env))?;
+    let boundary = format!("----dim{}", std::process::id());
+    let audio = std::fs::read(wav).map_err(|e| e.to_string())?;
+    let mut body: Vec<u8> = Vec::new();
+    let push = |b: &mut Vec<u8>, s: &str| {
+        b.extend_from_slice(s.as_bytes());
+        b.extend_from_slice(b"\r\n");
+    };
+    push(&mut body, &format!("--{boundary}"));
+    push(&mut body,
+         "Content-Disposition: form-data; name=\"model\"");
+    push(&mut body, "");
+    push(&mut body, &cfg.stt_model);
+    push(&mut body, &format!("--{boundary}"));
+    push(&mut body, "Content-Disposition: form-data; name=\"file\"; \
+                     filename=\"utterance.wav\"");
+    push(&mut body, "Content-Type: audio/wav");
+    push(&mut body, "");
+    body.extend_from_slice(&audio);
+    body.extend_from_slice(b"\r\n");
+    push(&mut body, &format!("--{boundary}--"));
+    push(&mut body, "");
+    let url = format!("{}/audio/transcriptions",
+                      cfg.stt_base_url.trim_end_matches('/'));
+    let resp = ureq::post(&url)
+        .set("User-Agent", "dim-agent/1.0") // edge blocks default UAs
+        .set("Authorization", &format!("Bearer {key}"))
+        .set("Content-Type",
+             &format!("multipart/form-data; boundary={boundary}"))
+        .timeout(std::time::Duration::from_secs(60))
+        .send_bytes(&body)
+        .map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_str(
+        &resp.into_string().map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    Ok(v.get("text").and_then(|t| t.as_str()).unwrap_or("")
+        .split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 fn transcribe(wav: &std::path::Path, cfg: &Cfg) -> Result<String, String> {
+    if cfg.stt_provider == "openai" {
+        return transcribe_openai(wav, cfg);
+    }
     if !cfg.whisper_bin.exists() || !cfg.whisper_model.exists() {
         return Err(format!("whisper.cpp missing: {} / {}",
                            cfg.whisper_bin.display(),

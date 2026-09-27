@@ -52,6 +52,17 @@ risk_threshold = 1.5
 confidence_instant = 0.95
 confidence_ambiguous = 0.8
 
+[stt]
+# Speech-to-text backend. "local" = whisper.cpp (default, offline).
+# "openai" = any OpenAI-compatible /audio/transcriptions endpoint —
+# Groq (base_url https://api.groq.com/openai/v1, model
+# whisper-large-v3-turbo), OpenAI, vLLM, Together, DeepInfra.
+provider = "local"
+base_url = "https://api.groq.com/openai/v1"
+model = "whisper-large-v3-turbo"
+# name of the env var / .env key holding the API key
+key_env = "GROQ_API_KEY"
+
 [voice]
 # spoken replies via espeak/espeak-ng when true; missing binary = silent no-op
 enabled = false
@@ -117,12 +128,17 @@ def whisper_model(cfg: dict) -> pathlib.Path:
     return WHISPER_HOME / "models" / name
 
 
-def load_api_key() -> str:
+def load_env_key(name: str) -> str:
+    """Resolve a secret: .env file first, then process environment."""
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text().splitlines():
-            if line.startswith("OPENROUTER_API_KEY="):
+            if line.startswith(f"{name}="):
                 return line.split("=", 1)[1].strip()
-    key = os.environ.get("OPENROUTER_API_KEY", "")
+    return os.environ.get(name, "")
+
+
+def load_api_key() -> str:
+    key = load_env_key("OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError(f"No OPENROUTER_API_KEY in {ENV_FILE} or environment")
     return key

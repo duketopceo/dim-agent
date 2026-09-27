@@ -176,6 +176,8 @@ def _amplitude_sampler(seconds: int, state=None) -> None:
 
 
 def transcribe(wav: pathlib.Path, cfg: dict) -> str:
+    if cfg.get("stt", {}).get("provider", "local") == "openai":
+        return _transcribe_openai(wav, cfg["stt"])
     model = config.whisper_model(cfg)
     if not (config.WHISPER_BIN.exists() and model.exists()):
         raise RuntimeError(f"whisper.cpp missing: {config.WHISPER_BIN} / {model}")
@@ -183,6 +185,41 @@ def transcribe(wav: pathlib.Path, cfg: dict) -> str:
         [str(config.WHISPER_BIN), "-m", str(model), "-nt", "-f", str(wav)],
         capture_output=True, text=True, timeout=120)
     return " ".join(r.stdout.split())
+
+
+def _transcribe_openai(wav: pathlib.Path, stt: dict) -> str:
+    """OpenAI-compatible /audio/transcriptions — Groq, OpenAI, vLLM,
+    Together, DeepInfra. Key comes from .env/env via stt.key_env."""
+    key = config.load_env_key(stt.get("key_env", "GROQ_API_KEY"))
+    if not key:
+        raise RuntimeError(
+            f"no {stt.get('key_env', 'GROQ_API_KEY')} in .env or environment")
+    base = stt.get("base_url", "https://api.groq.com/openai/v1") \
+        .rstrip("/")
+    boundary = f"----dim{int(time.monotonic() * 1000)}"
+    audio = wav.read_bytes()
+    body = b"\r\n".join([
+        f"--{boundary}".encode(),
+        b'Content-Disposition: form-data; name="model"',
+        b"",
+        stt.get("model", "whisper-large-v3-turbo").encode(),
+        f"--{boundary}".encode(),
+        b'Content-Disposition: form-data; name="file"; '
+        b'filename="utterance.wav"',
+        b"Content-Type: audio/wav",
+        b"",
+        audio,
+        f"--{boundary}--".encode(),
+        b"",
+    ])
+    req = urllib.request.Request(
+        f"{base}/audio/transcriptions", data=body,
+        headers={"Authorization": f"Bearer {key}",
+                 "User-Agent": "dim-agent/1.0",
+                 "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return " ".join(
+            json.loads(resp.read()).get("text", "").split())
 
 
 def build_questions(harness: dict | None) -> dict:
