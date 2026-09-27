@@ -27,9 +27,19 @@ pub const REGISTRY: &[(&str, &str, &str)] = &[
     ("agent_spawn", "safe", "spawn a named ori opencode agent"),
     ("task_status", "safe", "report a named agent's status"),
     ("task_cancel", "mutating", "cancel a named agent"),
+    ("memory", "mutating", "curate long-term memory — 'memory|add|fact', \
+     'memory|replace|old|new', 'memory|remove|old' (target 'user' for USER.md)"),
+    ("recall", "safe", "search long-term recall — 'search <query>'"),
+    ("skill_manage", "mutating", "author a self-taught skill — \
+     'create|name|description|body', 'edit|name||body', 'delete|name', \
+     'write_file|name|filename|body', 'remove_file|name|filename', 'list'"),
+    ("skill_view", "safe", "read a skill's full SKILL.md by name"),
 ];
 
 pub fn risk_of(name: &str) -> &'static str {
+    if name.starts_with("skill_") {
+        return crate::skills::skill_tier(name);
+    }
     REGISTRY
         .iter()
         .find(|(n, _, _)| *n == name)
@@ -163,7 +173,14 @@ pub fn run(name: &str, arg: &str, cfg: &Cfg) -> String {
         "agent_spawn" => crate::agents::spawn(arg),
         "task_status" => crate::agents::status(arg),
         "task_cancel" => crate::agents::cancel(arg),
-        _ => format!("SKIP (unknown tool {name})"),
+        "memory" => crate::memory::run(arg),
+        "recall" => crate::recall::run(arg),
+        "skill_manage" => crate::skills::run_manage(arg),
+        "skill_view" => crate::skills::view(arg.trim()),
+        _ => match crate::skills::run_skill_tool(name, arg) {
+            Some((msg, _)) => msg,
+            None => format!("SKIP (unknown tool {name})"),
+        },
     }
 }
 

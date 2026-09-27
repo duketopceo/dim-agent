@@ -6,8 +6,11 @@ mod config;
 mod harness;
 mod ipc;
 mod learn;
+mod memory;
 mod pipeline;
+mod recall;
 mod session;
+mod skills;
 mod state;
 mod tools;
 
@@ -175,4 +178,65 @@ fn daemon() -> i32 {
         return 1;
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    //! Single test fn: HOME/XDG env is process-global, so all
+    //! file-level contract checks live in one serial test.
+    #[test]
+    fn memory_recall_skills_contract() {
+        let tmp = std::env::temp_dir()
+            .join(format!("dimd-ut-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("HOME", &tmp);
+        std::env::set_var("XDG_RUNTIME_DIR", &tmp);
+
+        // memory: add/replace/remove + snapshot
+        assert!(crate::memory::run("memory|add|prefers vim")
+            .starts_with("OK"));
+        assert!(crate::memory::run("memory|replace|vim|prefers nvim")
+            .starts_with("OK"));
+        assert!(crate::memory::run("memory|add|scratch")
+            .starts_with("OK"));
+        assert!(crate::memory::run("memory|remove|scratch")
+            .starts_with("OK"));
+        assert!(crate::memory::snapshot().contains("prefers nvim"));
+        assert!(!crate::memory::snapshot().contains("scratch"));
+
+        // recall: index + FTS5 top-k + tool form
+        crate::recall::index_turn("how restart pipewire",
+                                "systemctl --user restart wireplumber",
+                                "");
+        assert!(crate::recall::run("search pipewire")
+            .contains("wireplumber"));
+        assert!(crate::recall::search("zzzqqq", 5).is_empty());
+        assert!(crate::recall::run("").contains("no recall hits"));
+
+        // skills: create/list/view/edit/delete + tool registration
+        assert!(crate::skills::run_manage(
+            "create|echoer|echoes args|body").starts_with("OK"));
+        assert!(crate::skills::run_manage("list").contains("echoer"));
+        assert!(crate::skills::view("echoer").contains("name: echoer"));
+        assert!(crate::skills::run_manage(
+            "write_file|echoer|run.sh|echo SKILL:$1").starts_with("OK"));
+        // declare the tool in frontmatter
+        let f = crate::config::data_dir()
+            .join("skills/echoer/SKILL.md");
+        std::fs::write(&f, "---\nname: echoer\ndescription: echoes args\
+                            \ntool: run.sh\ntier: safe\n---\nbody\n").unwrap();
+        assert_eq!(crate::tools::risk_of("skill_echoer"), "safe");
+        let (msg, _) = crate::skills::run_skill_tool("skill_echoer", "hi")
+            .unwrap();
+        assert!(msg.contains("SKILL:hi"));
+        assert!(crate::skills::run_manage(
+            "write_file|echoer|../evil|x").starts_with("FAIL"));
+        assert!(crate::skills::run_manage("delete|echoer").starts_with("OK"));
+        assert!(crate::skills::view("echoer").starts_with("FAIL"));
+
+        // registry parity: new tools present with expected tiers
+        assert_eq!(crate::tools::risk_of("memory"), "mutating");
+        assert_eq!(crate::tools::risk_of("recall"), "safe");
+        assert_eq!(crate::tools::risk_of("nonexistent"), "shell");
+    }
 }

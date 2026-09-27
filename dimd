@@ -78,6 +78,8 @@ def _run_listen(st: state_mod.State, cfg: dict, ctl: dict) -> None:
 
 
 def run_daemon(cfg: dict) -> int:
+    from dim import skills
+    skills.register_tools()  # skill_<name> entries from skills/*/SKILL.md
     st = state_mod.State()
     ctl = {"stop": threading.Event(), "busy": threading.Event(),
            "choice_event": threading.Event(), "choice_pick": ""}

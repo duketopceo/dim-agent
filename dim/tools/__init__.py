@@ -28,6 +28,16 @@ REGISTRY = {
     "agent_spawn": (None, "safe", "spawn a named ori opencode agent"),  # wired in dim.agents
     "task_status": (None, "safe", "report a named agent's status"),
     "task_cancel": (None, "mutating", "cancel a named agent"),
+    "memory": (None, "mutating", "curate long-term memory — "
+               "'memory|add|new fact' or 'memory|replace|old|new' or "
+               "'memory|remove|old' (target 'user' for USER.md)"),
+    "recall": (None, "safe", "search long-term recall — "
+               "'search <query>' returns top-k indexed context"),
+    "skill_manage": (None, "mutating", "author a self-taught skill — "
+                     "'create|name|description|body', 'edit|name||body', "
+                     "'write_file|name|filename|body', 'delete|name', "
+                     "'remove_file|name|filename', 'list'"),
+    "skill_view": (None, "safe", "read a skill's full SKILL.md by name"),
 }
 
 
@@ -47,7 +57,8 @@ def tool_schemas() -> list:
     out = []
     for name, (fn, tier, desc) in REGISTRY.items():
         if fn is None and name not in ("agent_spawn", "task_status",
-                                       "task_cancel"):
+                                       "task_cancel", "memory", "recall",
+                                       "skill_manage", "skill_view"):
             continue
         out.append({
             "type": "function",
@@ -83,6 +94,18 @@ def run(name: str, arg: str, cfg: dict, harness: dict | None = None) -> str:
         return agents.status(arg)
     if name == "task_cancel":
         return agents.cancel(arg)
+    if name == "memory":
+        from .. import memory
+        return memory.run(arg)
+    if name == "recall":
+        from .. import recall
+        return recall.run(arg)
+    if name == "skill_manage":
+        from .. import skills
+        return skills.run_manage(arg)
+    if name == "skill_view":
+        from .. import skills
+        return skills.run_view(arg)
     entry = REGISTRY.get(name)
     if entry is None or entry[0] is None:
         return f"SKIP (tool {name!r} unavailable)"

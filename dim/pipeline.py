@@ -33,6 +33,9 @@ JEV_QUESTIONS = {
             "agent": "spawn a background agent for a coding, research, or "
                      "multi-step task — phrases like 'agent', 'have an "
                      "agent', 'spawn', 'delegate'",
+            "learn": "the user wants Dim to learn or remember how to do "
+                     "something — 'learn X', 'remember this', 'add a "
+                     "skill for'",
             "act": "a multi-step desktop task — do several things, or "
                    "imperative instructions like 'open X and go to "
                    "workspace 2' or 'type this into the window'",
@@ -257,6 +260,14 @@ def ask_chat(transcript: str, cfg: dict, session_text: str = "",
              "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
         ]
     messages = [{"role": "system", "content": system}]
+    from . import memory, skills
+    snap = memory.snapshot()
+    if snap:
+        messages.append({"role": "system", "content": snap})
+    sidx = skills.index_text()
+    if sidx:
+        messages.append({"role": "system",
+                         "content": f"Learned skills:\n{sidx}"})
     if session_text:
         messages.append({"role": "system",
                          "content": f"Recent conversation:\n{session_text}"})
@@ -344,6 +355,15 @@ def execute(answers: dict, cfg: dict, harness: dict | None = None,
     if route == "act":
         from . import act
         return act.run_act_loop(detail, cfg, state=state,
+                                harness=harness, confirm=confirm)
+    if route == "learn":
+        from . import act
+        prompt = ("Author a reusable skill for this request using the "
+                  "skill_manage and skill_view tools. If a skill on this "
+                  "topic already exists, view it and fold improvements "
+                  "in with edit; otherwise create it. Keep the SKILL.md "
+                  "body concise and procedural. Request: " + detail)
+        return act.run_act_loop(prompt, cfg, state=state,
                                 harness=harness, confirm=confirm)
     if route == "tool":
         tool_name = answers.get("tool", {}).get("choice", "")
@@ -444,6 +464,16 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
         session_text = session.as_text(session.tail(n_turns))
         if session_text:
             context += f"\nRecent conversation:\n{session_text}"
+        from . import memory, recall, skills
+        snap = memory.snapshot()
+        if snap:
+            context += f"\n{snap}"
+        sidx = skills.index_text()
+        if sidx:
+            context += f"\n[skills]\n{sidx}"
+        rec = recall.context_for(text)
+        if rec:
+            context += f"\n[recall]\n{rec}"
         resp = ask_jev(text, model, build_questions(harness), context=context)
         timing["jev_ms"] = round((time.monotonic() - t0) * 1000
                                  - timing["record_ms"] - timing["stt_ms"])
@@ -458,8 +488,10 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
                 state.transition("acting", choices=[])
                 if picked:
                     corrected = apply_choice(answers, picked)
-                    from . import learn
+                    from . import learn, recall as _recall
                     learn.record_correction(text, picked, answers)
+                    _recall.index_correction(
+                        {"heard": text, "picked": picked})
         if low_conf and not corrected:
             result = "CANCELLED (low confidence, no pick made)"
             state.transition("done", result=result)
@@ -495,6 +527,11 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
             state.transition("done", result=result)
         session.append_turn(text, route=answers.get("route", {})
                             .get("choice", ""), reply=reply, result=result)
+        try:
+            from . import recall as _recall
+            _recall.index_turn(text, reply, result)
+        except Exception:
+            pass
         notify(result)
         timing["act_ms"] = round((time.monotonic() - t0) * 1000)
         log_decision({"ts": datetime.now(timezone.utc).isoformat(),

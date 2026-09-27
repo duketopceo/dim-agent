@@ -24,7 +24,14 @@ future tray apps). Shells MUST only depend on this document.
 | `task_status` | `name: string` | `{ok, result: string}` | named-agent status |
 | `task_cancel` | `name: string` | `{ok, result: string}` | cancel named agent |
 | `stop` | — | `{ok}` | daemon exits, socket removed |
+| `config` | `set: {"section.key": "val"}` (optional) | `{ok, config}` | read config; with `set`, writes config.toml preserving comments/order and live-reloads |
+| `learn` | — | `{ok, result}` | weekly learning proposals (human-gated) |
+| `harness` | — | `{ok, result}` | regenerate the app harness catalog |
 | unknown/malformed | — | `{ok:false, error}` | — |
+
+`config` keys are `section.key` (e.g. `agent.answer_model`); the daemon
+returns `{ok:false}` if any key lacks a section. Shells may offer a
+settings page on top of this command.
 
 ## state.json (atomically rewritten, tmp+rename)
 

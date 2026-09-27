@@ -1,6 +1,7 @@
 //! Listen cycle: record -> whisper -> route (Jev|chat) -> execute.
 //! Parity with dim/pipeline.py, incl. timing_ms + decisions.jsonl.
-use crate::{brain, config::Cfg, learn, session, state::State, tools};
+use crate::{brain, config::Cfg, learn, memory, recall, session, skills,
+            state::State, tools};
 use serde_json::{json, Value};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,6 +46,7 @@ pub fn build_questions(cfg: &Cfg) -> Value {
                 "launch": "open, start, or close an application",
                 "tool": "a desktop/system action — window ops, workspace switch, type text, screenshot, notify, run a command, find files",
                 "agent": "spawn a background agent for a coding, research, or multi-step task",
+                "learn": "the user wants Dim to learn or remember how to do something — 'learn X', 'remember this'",
                 "act": "a multi-step desktop task — do several things, or imperative instructions",
                 "answer": "the user is asking a question or chatting — respond in text",
                 "clarify": "the request is too ambiguous to act on",
@@ -185,11 +187,20 @@ fn answer_text(transcript: &str, cfg: &Cfg, session: &str,
     } else {
         vec![]
     };
-    let system = "You are Dim, a terse desktop voice assistant. Answer in \
+    let mut system = "You are Dim, a terse desktop voice assistant. Answer in \
                   one or two short sentences, plain speech, no markdown. \
                   If a screenshot is attached, describe what is relevant. \
-                  To point at a screen element, append [POINT:x,y:label].";
-    brain::chat(cfg, system, transcript, session, &img, None)
+                  To point at a screen element, append [POINT:x,y:label]."
+        .to_string();
+    let snap = memory::snapshot();
+    if !snap.is_empty() {
+        system.push_str(&format!("\n\n{snap}"));
+    }
+    let sidx = skills::index_text();
+    if !sidx.is_empty() {
+        system.push_str(&format!("\n\nLearned skills:\n{sidx}"));
+    }
+    brain::chat(cfg, &system, transcript, session, &img, None)
         .ok()
         .and_then(|m| m.get("content").and_then(|c| c.as_str())
             .map(|s| s.trim().to_string()))
@@ -338,6 +349,18 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
         if !session_text.is_empty() {
             context.push_str(&format!("\nRecent conversation:\n{session_text}"));
         }
+        let snap = memory::snapshot();
+        if !snap.is_empty() {
+            context.push_str(&format!("\n{snap}"));
+        }
+        let sidx = skills::index_text();
+        if !sidx.is_empty() {
+            context.push_str(&format!("\n[skills]\n{sidx}"));
+        }
+        let rec = recall::context_for(&text, 3);
+        if !rec.is_empty() {
+            context.push_str(&format!("\n[recall]\n{rec}"));
+        }
         let answers = match cfg.router.as_str() {
             "chat" => json!({"route": {"choice": "answer"},
                             "needs_screen": {"noul": 1.0}}),
@@ -364,6 +387,7 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
                                   &[("choices", json!(labels))]);
                     if let Some(pick) = ctl.wait(30) {
                         learn::record_correction(&text, &pick, &answers);
+                        recall::index_correction(&text, &pick);
                         if let Some(app) = answers.get_mut("app") {
                             app["choice"] = json!(pick);
                         }
@@ -417,6 +441,13 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
             }
             "agent" => crate::agents::spawn(&text),
             "act" => act_loop(&text, cfg, st, ctl),
+            "learn" => act_loop(&format!(
+                "Author a reusable skill for this request using the \
+                 skill_manage and skill_view tools. If a skill on this \
+                 topic already exists, view it and fold improvements in \
+                 with edit; otherwise create it. Keep the SKILL.md body \
+                 concise and procedural. Request: {text}"),
+                cfg, st, ctl),
             "answer" => {
                 let needs = answers.pointer("/needs_screen/noul")
                     .and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.5;
@@ -427,6 +458,7 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
                     speak(&reply);
                 }
                 session::append_turn(&text, "answer", &reply, "ANSWERED");
+                recall::index_turn(&text, &reply, "ANSWERED");
                 timing.insert("act_ms".into(), json!(t0.elapsed().as_millis()));
                 log_decision(&json!({"transcript": text, "answers": answers,
                                      "result": "ANSWERED",
@@ -436,6 +468,7 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
             _ => "CLARIFY (request too ambiguous)".into(),
         };
         session::append_turn(&text, &route, "", &res);
+        recall::index_turn(&text, "", &res);
         st.transition("done", &[("result", json!(res.clone()))]);
         Ok(res)
     })();

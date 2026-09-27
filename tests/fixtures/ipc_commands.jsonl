@@ -5,3 +5,5 @@
 {"cmd": "task_cancel", "name": "research-x"}
 {"cmd": "stop"}
 {"cmd": "bogus"}
+{"cmd": "config"}
+{"cmd": "config", "set": {"agent.answer_model": "x"}}

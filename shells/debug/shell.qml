@@ -34,7 +34,13 @@ FloatingWindow {
     cmdProc.running = true;
   }
 
+  function svc(args) {
+    svcProc.command = ["systemctl", "--user"].concat(args).concat(["dimd"]);
+    svcProc.running = true;
+  }
+
   Process { id: cmdProc; command: ["dimd", "status"] }
+  Process { id: svcProc; command: ["systemctl", "--user", "status", "dimd"] }
 
   // config fetch: dimd config prints JSON when daemon up; parse stdout
   Process {
@@ -102,6 +108,32 @@ FloatingWindow {
     }
   }
 
+  FileView {
+    id: memoryView
+    path: win.dataDir + "/MEMORY.md"
+    watchChanges: true
+    onFileChanged: reload()
+  }
+  FileView {
+    id: userView
+    path: win.dataDir + "/USER.md"
+    watchChanges: true
+    onFileChanged: reload()
+  }
+  property string skillsList: ""
+  Process {
+    id: skillsProc
+    command: ["sh", "-c", "for d in \"$HOME/.local/share/dim-agent/skills\"/*/; do [ -f \"$d/SKILL.md\" ] && echo \"== $d\" && cat \"$d/SKILL.md\"; done"]
+    stdout: StdioCollector {
+      onStreamFinished: win.skillsList = this.text
+    }
+  }
+  Timer {
+    interval: 2000; running: true; repeat: true
+    onTriggered: { memoryView.reload(); userView.reload();
+                   skillsProc.running = true; }
+  }
+
   Timer {
     interval: 500; running: true; repeat: true
     onTriggered: { stateView.reload(); decisionsView.reload();
@@ -144,7 +176,7 @@ FloatingWindow {
         Text { text: "  DIM"; color: accent; font.pixelSize: 15
                font.bold: true; bottomPadding: 12 }
         Repeater {
-          model: ["Status", "Logs", "Session", "Tasks", "Settings"]
+          model: ["Status", "Logs", "Session", "Memory", "Tasks", "Settings"]
           Rectangle {
             width: 150; height: 34
             color: win.tab === index ? "#283457" : "transparent"
@@ -177,7 +209,7 @@ FloatingWindow {
                    color: fg; font.pixelSize: 20; font.bold: true }
             Item { width: 20 }
             Repeater {
-              model: ["listen", "stop", "learn", "harness"]
+              model: ["listen", "learn", "harness"]
               Rectangle {
                 height: 30; width: bl.implicitWidth + 20; radius: 7
                 color: "#283457"
@@ -187,6 +219,27 @@ FloatingWindow {
                             onClicked: win.dimd([modelData]) }
               }
             }
+          }
+          Row {
+            spacing: 14
+            Text { text: "daemon:"; color: faint; font.pixelSize: 11
+                   anchors.verticalCenter: parent.verticalCenter }
+            Repeater {
+              model: [["start", "start"], ["stop", "stop"],
+                      ["restart", "restart"], ["enable", "enable"],
+                      ["disable", "disable"]]
+              Rectangle {
+                height: 26; width: sbl.implicitWidth + 16; radius: 6
+                color: "#232736"
+                Text { id: sbl; anchors.centerIn: parent
+                       text: modelData[0]; color: dim; font.pixelSize: 11 }
+                MouseArea { anchors.fill: parent
+                            onClicked: win.svc([modelData[1]]) }
+              }
+            }
+            Text { text: "GUI closes; daemon stays resident"
+                   color: faint; font.pixelSize: 10
+                   anchors.verticalCenter: parent.verticalCenter }
           }
           Rectangle { width: parent.width; height: 1; color: border }
           Grid {
@@ -223,8 +276,28 @@ FloatingWindow {
         contentHeight: logCol.implicitHeight; clip: true
         Column {
           id: logCol; width: parent.width; padding: 16; spacing: 6
-          Text { text: "decisions.jsonl — newest first"
-                 color: faint; font.pixelSize: 11; bottomPadding: 6 }
+          // aggregate stats over the loaded window
+          Text {
+            color: faint; font.pixelSize: 11; bottomPadding: 6
+            text: {
+              var d = win.decisions;
+              if (!d.length) return "decisions.jsonl — no entries yet";
+              var routes = {}, errs = 0, tot = 0;
+              for (var i = 0; i < d.length; i++) {
+                var r = (d[i].result || "");
+                if (r.indexOf("ERROR") === 0) errs++;
+                var rt = (d[i].answers || {}).route || {};
+                var c = rt.choice || "n/a";
+                routes[c] = (routes[c] || 0) + 1;
+                if (d[i].timing_ms) tot += d[i].timing_ms.act_ms || 0;
+              }
+              var parts = [];
+              for (var k in routes) parts.push(k + ":" + routes[k]);
+              return "decisions.jsonl — " + d.length + " shown · " +
+                     errs + " errors · routes " + parts.join(" ") +
+                     " · avg pipeline " + Math.round(tot / d.length) + "ms";
+            }
+          }
           Repeater {
             model: win.decisions
             Rectangle {
@@ -294,6 +367,40 @@ FloatingWindow {
         }
       }
 
+      // MEMORY — curated memory + recall store + skills
+      Flickable {
+        contentHeight: memCol.implicitHeight; clip: true
+        Column {
+          id: memCol; width: parent.width; padding: 16; spacing: 8
+          Text { text: "MEMORY.md"; color: faint; font.pixelSize: 11 }
+          Rectangle {
+            width: memCol.width - 32; height: memTxt.implicitHeight + 16
+            color: card; radius: 6
+            Text { id: memTxt; anchors.fill: parent; anchors.margins: 8
+                   text: memoryView.text() || "(empty — Dim curates this via the memory tool)"
+                   color: fg; font.pixelSize: 11; wrapMode: Text.Wrap }
+          }
+          Text { text: "USER.md"; color: faint; font.pixelSize: 11 }
+          Rectangle {
+            width: memCol.width - 32; height: usrTxt.implicitHeight + 16
+            color: card; radius: 6
+            Text { id: usrTxt; anchors.fill: parent; anchors.margins: 8
+                   text: userView.text() || "(empty)"
+                   color: fg; font.pixelSize: 11; wrapMode: Text.Wrap }
+          }
+          Text { text: "skills/ — self-authored SKILL.md files"
+                 color: faint; font.pixelSize: 11; topPadding: 6 }
+          Rectangle {
+            width: memCol.width - 32; height: skTxt.implicitHeight + 16
+            color: card; radius: 6
+            Text { id: skTxt; anchors.fill: parent; anchors.margins: 8
+                   text: win.skillsList || "(no skills yet — say \"Dim, learn …\")"
+                   color: dim; font.pixelSize: 10
+                   font.family: "monospace"; wrapMode: Text.Wrap }
+          }
+        }
+      }
+
       // TASKS
       Flickable {
         contentHeight: taskCol.implicitHeight; clip: true
@@ -340,6 +447,7 @@ FloatingWindow {
               ["agent.risk_threshold", "risk threshold"],
               ["agent.allow_shell", "allow_shell (true|false)"],
               ["agent.screenshots", "screenshots (true|false)"],
+              ["agents.model", "agent runtime model (ori opencode)"],
             ]
             Rectangle {
               width: setCol.width - 32; height: 40
