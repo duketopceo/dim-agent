@@ -1,6 +1,6 @@
 //! Listen cycle: record -> whisper -> route (Jev|chat) -> execute.
 //! Parity with dim/pipeline.py, incl. timing_ms + decisions.jsonl.
-use crate::{brain, config::Cfg, state::State, tools};
+use crate::{brain, config::Cfg, learn, session, state::State, tools};
 use serde_json::{json, Value};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -80,6 +80,19 @@ fn app_criteria(cfg: &Cfg) -> Value {
             c.insert(k.into(), json!(d));
         }
     }
+    // harness apps (generic .desktop catalog or mined) take priority
+    let h = crate::config::data_dir().join("harness.json");
+    if let Ok(text) = std::fs::read_to_string(h) {
+        if let Ok(v) = serde_json::from_str::<Value>(&text) {
+            if let Some(apps) = v.get("apps").and_then(|a| a.as_object()) {
+                for (k, a) in apps {
+                    c.insert(k.clone(), json!(
+                        a.get("cues").and_then(|x| x.as_str()).unwrap_or(k)));
+                }
+            }
+        }
+    }
+    learn::apply_overrides(&mut c);
     json!(c)
 }
 
@@ -141,18 +154,7 @@ fn log_decision(rec: &Value) {
     }
 }
 
-fn append_session(transcript: &str, route: &str, reply: &str, result: &str) {
-    let f = crate::config::data_dir().join("session.jsonl");
-    if let Some(p) = f.parent() {
-        std::fs::create_dir_all(p).ok();
-    }
-    if let Ok(mut file) = std::fs::OpenOptions::new().append(true).create(true).open(f) {
-        use std::io::Write;
-        let _ = writeln!(file, "{}", json!({"ts": crate::state::now_iso(),
-            "transcript": transcript, "route": route, "reply": reply,
-            "result": result}));
-    }
-}
+
 
 fn capture_screen_b64() -> Option<String> {
     if !tools::which("grim") {
@@ -331,7 +333,11 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
         }
 
         // route: jev (default) | chat (straight to answer model) | off
-        let context = active_window_text();
+        let mut context = active_window_text();
+        let session_text = session::as_text(&session::tail(cfg.session_turns));
+        if !session_text.is_empty() {
+            context.push_str(&format!("\nRecent conversation:\n{session_text}"));
+        }
         let answers = match cfg.router.as_str() {
             "chat" => json!({"route": {"choice": "answer"},
                             "needs_screen": {"noul": 1.0}}),
@@ -357,6 +363,7 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
                     st.transition("awaiting_choice",
                                   &[("choices", json!(labels))]);
                     if let Some(pick) = ctl.wait(30) {
+                        learn::record_correction(&text, &pick, &answers);
                         if let Some(app) = answers.get_mut("app") {
                             app["choice"] = json!(pick);
                         }
@@ -380,7 +387,6 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
             return Ok(r);
         }
 
-        let session_text = String::new(); // session tail: TODO parity
         let res = match route.as_str() {
             "launch" => {
                 let app = answers.pointer("/app/choice")
@@ -420,7 +426,7 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
                 if cfg.voice_out {
                     speak(&reply);
                 }
-                append_session(&text, "answer", &reply, "ANSWERED");
+                session::append_turn(&text, "answer", &reply, "ANSWERED");
                 timing.insert("act_ms".into(), json!(t0.elapsed().as_millis()));
                 log_decision(&json!({"transcript": text, "answers": answers,
                                      "result": "ANSWERED",
@@ -429,7 +435,7 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
             }
             _ => "CLARIFY (request too ambiguous)".into(),
         };
-        append_session(&text, &route, "", &res);
+        session::append_turn(&text, &route, "", &res);
         st.transition("done", &[("result", json!(res.clone()))]);
         Ok(res)
     })();

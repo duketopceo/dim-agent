@@ -3,8 +3,11 @@
 mod agents;
 mod brain;
 mod config;
+mod harness;
 mod ipc;
+mod learn;
 mod pipeline;
+mod session;
 mod state;
 mod tools;
 
@@ -30,6 +33,16 @@ fn main() {
         "task_cancel" => {
             let n = std::env::args().nth(2).unwrap_or_default();
             client(&json!({"cmd": "task_cancel", "name": n}), false)
+        }
+        "learn" => {
+            let p = learn::weekly(7);
+            if p.is_empty() { println!("nothing to propose"); }
+            else { println!("{p}"); }
+            0
+        }
+        "harness" => match harness::build() {
+            Ok(s) => { println!("{s}"); 0 }
+            Err(e) => { eprintln!("{e}"); 1 }
         }
         _ => {
             eprintln!("usage: dimd [daemon|trigger|status|stop|choice|task_status|task_cancel]");
@@ -121,6 +134,15 @@ fn daemon() -> i32 {
                 let n = cmd.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 json!({"ok": true, "result": agents::cancel(n)})
             }
+            "learn" => {
+                let p = learn::weekly(7);
+                json!({"ok": true, "result": if p.is_empty() {
+                    "nothing to propose".into() } else { p }})
+            }
+            "harness" => match harness::build() {
+                Ok(s) => json!({"ok": true, "result": s}),
+                Err(e) => json!({"ok": false, "error": e}),
+            },
             "stop" => {
                 running_h.store(false, Ordering::SeqCst);
                 json!({"ok": true})
