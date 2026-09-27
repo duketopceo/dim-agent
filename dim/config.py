@@ -132,3 +132,36 @@ def load_harness() -> dict | None:
         return json.loads(HARNESS_FILE.read_text())
     except Exception:
         return None
+
+
+def set_config(section: str, key: str, value: str) -> None:
+    """Update one key in config.toml, preserving comments and order.
+    Appends the key under its section (or a new section) when absent."""
+    CFG_DIR.mkdir(parents=True, exist_ok=True)
+    if not CFG_FILE.exists():
+        CFG_FILE.write_text(DEFAULT_CONFIG)
+    lines = CFG_FILE.read_text().splitlines()
+    cur_section = None
+    section_start = section_end = None
+    written = False
+    for i, raw in enumerate(lines):
+        line = raw.split("#", 1)[0].strip()
+        if line.startswith("["):
+            if cur_section == section:
+                section_end = i
+            cur_section = line.strip("[]")
+            if cur_section == section:
+                section_start = i
+            continue
+        if cur_section == section and "=" in line:
+            k = line.split("=", 1)[0].strip()
+            if k == key:
+                lines[i] = f'{key} = "{value}"'
+                written = True
+    if not written:
+        if section_start is None:
+            lines += ["", f"[{section}]", f'{key} = "{value}"']
+        else:
+            at = section_end if section_end is not None else len(lines)
+            lines.insert(at, f'{key} = "{value}"')
+    CFG_FILE.write_text("\n".join(lines) + "\n")

@@ -101,7 +101,8 @@ fn daemon() -> i32 {
     let running_h = running.clone();
     let busy_h = busy.clone();
     let ctl_h = ctl.clone();
-    let cfg_h = Arc::new(cfg);
+    let cfg_h2 = Arc::new(std::sync::Mutex::new(cfg));
+    let cfg_h = cfg_h2.clone();
 
     let handler = Arc::new(move |cmd: Value| -> Value {
         match cmd.get("cmd").and_then(|c| c.as_str()).unwrap_or("") {
@@ -116,7 +117,8 @@ fn daemon() -> i32 {
                 let running2 = running_h.clone();
                 let busy2 = busy_h.clone();
                 std::thread::spawn(move || {
-                    pipeline::run_listen(&cfg2, &st2, &ctl2, running2);
+                    let cfg_guard = cfg2.lock().unwrap().clone();
+                    pipeline::run_listen(&cfg_guard, &st2, &ctl2, running2);
                     busy2.store(false, Ordering::SeqCst);
                 });
                 json!({"ok": true})
@@ -143,6 +145,22 @@ fn daemon() -> i32 {
                 Ok(s) => json!({"ok": true, "result": s}),
                 Err(e) => json!({"ok": false, "error": e}),
             },
+            "config" => {
+                if let Some(set) = cmd.get("set").and_then(|v| v.as_object()) {
+                    for (k, v) in set {
+                        let (sec, key) = k.split_once('.').unwrap_or(("", ""));
+                        if sec.is_empty() || key.is_empty() {
+                            return json!({"ok": false,
+                                "error": "config keys must be section.key"});
+                        }
+                        config::set_config(sec, key,
+                            v.as_str().unwrap_or(&v.to_string()));
+                    }
+                    *cfg_h2.lock().unwrap() = config::load();
+                }
+                json!({"ok": true,
+                       "config": cfg_h2.lock().unwrap().raw})
+            }
             "stop" => {
                 running_h.store(false, Ordering::SeqCst);
                 json!({"ok": true})

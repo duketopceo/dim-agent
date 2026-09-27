@@ -104,6 +104,50 @@ pub fn load() -> Cfg {
     }
 }
 
+/// Update one `section.key` in config.toml preserving comments/order.
+/// Appends the key under its section (or a new section) when absent.
+pub fn set_config(section: &str, key: &str, value: &str) {
+    let path = cfg_dir().join("config.toml");
+    std::fs::create_dir_all(cfg_dir()).ok();
+    let mut lines: Vec<String> = std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .lines().map(String::from).collect();
+    let mut cur = String::new();
+    let mut section_start: Option<usize> = None;
+    let mut section_end = lines.len();
+    let mut written = false;
+    let mut replace_at: Option<usize> = None;
+    for (i, raw) in lines.iter().enumerate() {
+        let line = raw.split('#').next().unwrap_or("").trim().to_string();
+        if line.starts_with('[') {
+            if cur == section { section_end = i; }
+            cur = line.trim_matches(['[', ']']).to_string();
+            if cur == section { section_start = Some(i); }
+            continue;
+        }
+        if cur == section && line.contains('=') {
+            let k = line.split('=').next().unwrap().trim().to_string();
+            if k == key {
+                replace_at = Some(i);
+                written = true;
+            }
+        }
+    }
+    if let Some(i) = replace_at {
+        lines[i] = format!("{key} = \"{value}\"");
+    }
+    if !written {
+        if section_start.is_none() {
+            lines.push(String::new());
+            lines.push(format!("[{section}]"));
+            lines.push(format!("{key} = \"{value}\""));
+        } else {
+            lines.insert(section_end, format!("{key} = \"{value}\""));
+        }
+    }
+    std::fs::write(&path, lines.join("\n") + "\n").ok();
+}
+
 pub fn api_key() -> Result<String, String> {
     // .env file then process env — same order as Python
     let env_file = cfg_dir().join(".env");
