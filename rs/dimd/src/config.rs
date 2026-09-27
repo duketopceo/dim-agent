@@ -1,6 +1,7 @@
 //! Config: ~/.config/dim-agent/config.toml + .env secrets.
 //! Parity with dim/config.py — same paths, same keys, same defaults.
 use serde::Deserialize;
+use std::process::Command;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -205,6 +206,16 @@ pub fn set_config(section: &str, key: &str, value: &str)
 /// Resolve a secret: .env file first, then process environment
 /// (parity with Python load_env_key).
 pub fn env_key(name: &str) -> Option<String> {
+    if let Some(ref_) = name.strip_prefix("omaseal://") {
+        let (svc, acct) = ref_.split_once('/')?;
+        return Command::new("omaseal")
+            .args(["get", svc, acct])
+            .output().ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+    }
     let env_file = cfg_dir().join(".env");
     if let Ok(text) = std::fs::read_to_string(&env_file) {
         let prefix = format!("{name}=");

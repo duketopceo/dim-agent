@@ -2,6 +2,7 @@
 import json
 import os
 import pathlib
+import subprocess
 
 HOME = pathlib.Path.home()
 CFG_DIR = HOME / ".config" / "dim-agent"
@@ -132,7 +133,19 @@ def whisper_model(cfg: dict) -> pathlib.Path:
 
 
 def load_env_key(name: str) -> str:
-    """Resolve a secret: .env file first, then process environment."""
+    """Resolve a secret: omaseal:// ref, .env file, then environment."""
+    if name.startswith("omaseal://"):
+        ref = name[len("omaseal://"):].split("/", 1)
+        if len(ref) == 2:
+            try:
+                r = subprocess.run(
+                    ["omaseal", "get", ref[0], ref[1]],
+                    capture_output=True, text=True, timeout=10)
+                if r.returncode == 0:
+                    return r.stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return ""
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text().splitlines():
             if line.startswith(f"{name}="):
