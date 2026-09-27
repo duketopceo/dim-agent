@@ -50,6 +50,16 @@ settings page on top of this command.
 }
 ```
 
+Confirmation gate: when a mutating/shell action needs approval, the
+core transitions to `awaiting_choice` with `choices` = e.g.
+["<prompt> — yes", "no"]; clients reply via `choice` (pick string).
+Both cores use this same mechanism — neither may block holding a
+client's request socket open for the answer.
+
+Result/result-text fields (`result`, `error`, task statuses, `harness`
+and `learn` output) are human-readable free text — parity asserts the
+envelope (`ok` bool + field presence), not message wording.
+
 Status vocabulary is closed; shells must treat unknown statuses as
 `idle`-equivalent rather than failing. `points` may be absent/empty on
 older cores — default `[]`. Point fields: `x`,`y` are Hyprland logical

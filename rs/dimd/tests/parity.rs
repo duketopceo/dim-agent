@@ -86,15 +86,32 @@ fn fixture_replay_against_live_daemon() {
         assert_eq!(resp.get("ok").and_then(|v| v.as_bool()).is_some(),
                    true, "no ok field for {name}");
         match name.as_str() {
-            "bogus" =>
-                assert_eq!(resp["ok"], json!(false)),
+            "bogus" => {
+                assert_eq!(resp["ok"], json!(false));
+                assert!(resp["error"].as_str().unwrap_or("")
+                        .contains("unknown cmd"),
+                        "unknown-cmd error string: {resp}");
+            }
             "listen" =>
                 // busy or ok — a second listen may be refused; either is
                 // contract-conformant. First call may be ok:true.
                 assert!(resp["ok"].is_boolean()),
-            "status" =>
-                assert!(resp["state"].is_object(),
-                        "status must return state object"),
+            "status" => {
+                let st = &resp["state"];
+                assert!(st.is_object(), "status must return state object");
+                for f in ["status", "transcript", "answer", "result",
+                          "choices", "points", "level", "tasks",
+                          "error", "started_at"] {
+                    assert!(st.get(f).is_some(),
+                            "state.json missing field: {f}");
+                }
+            }
+            "task_status" | "task_cancel" | "learn" =>
+                assert!(resp.get("result").is_some(),
+                        "{name} must return result"),
+            "config" =>
+                assert!(resp["config"].is_object(),
+                        "config must return flat config object"),
             "stop" => saw_stop = true,
             _ => assert!(resp["ok"].is_boolean()),
         }
