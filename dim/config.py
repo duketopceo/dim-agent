@@ -136,7 +136,15 @@ def load_harness() -> dict | None:
 
 def set_config(section: str, key: str, value: str) -> None:
     """Update one key in config.toml, preserving comments and order.
-    Appends the key under its section (or a new section) when absent."""
+    Appends the key under its section (or a new section) when absent.
+    The flat parser can't represent quotes/backslashes/comments inside a
+    value — reject them rather than writing corrupt TOML."""
+    if any(c in value for c in '"\\#\n'):
+        raise ValueError("config values may not contain \" \\ # or newline")
+    import re as _re
+    for part in (section, key):
+        if not _re.fullmatch(r"[A-Za-z0-9_-]+", part or ""):
+            raise ValueError("config section/key must match [A-Za-z0-9_-]+")
     CFG_DIR.mkdir(parents=True, exist_ok=True)
     if not CFG_FILE.exists():
         CFG_FILE.write_text(DEFAULT_CONFIG)
@@ -164,4 +172,6 @@ def set_config(section: str, key: str, value: str) -> None:
         else:
             at = section_end if section_end is not None else len(lines)
             lines.insert(at, f'{key} = "{value}"')
-    CFG_FILE.write_text("\n".join(lines) + "\n")
+    tmp = CFG_FILE.with_suffix(".toml.tmp")
+    tmp.write_text("\n".join(lines) + "\n")
+    tmp.replace(CFG_FILE)  # atomic — a crash can't truncate the config

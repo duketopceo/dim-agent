@@ -12,22 +12,7 @@ fn log_dir() -> PathBuf {
 }
 
 fn slug(text: &str) -> String {
-    let mut s = String::with_capacity(32);
-    let mut dash = false;
-    for ch in text.to_lowercase().chars() {
-        if ch.is_ascii_alphanumeric() {
-            s.push(ch);
-            dash = false;
-        } else if !dash && !s.is_empty() {
-            s.push('-');
-            dash = true;
-        }
-        if s.len() >= 32 {
-            break;
-        }
-    }
-    let s = s.trim_end_matches('-').to_string();
-    if s.is_empty() { "task".into() } else { s }
+    crate::util::slug(text, 32, "task")
 }
 
 fn records() -> Vec<Value> {

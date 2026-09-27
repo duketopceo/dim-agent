@@ -13,6 +13,7 @@ mod session;
 mod skills;
 mod state;
 mod tools;
+mod util;
 
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,8 +48,62 @@ fn main() {
             Ok(s) => { println!("{s}"); 0 }
             Err(e) => { eprintln!("{e}"); 1 }
         }
+        "backfill" => { println!("{}", recall::backfill()); 0 }
+        "config" => {
+            // `dimd config` → IPC get; `dimd config set section.key v`
+            // → IPC set first, local write only when the daemon is down
+            // (parity with the Python CLI).
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            if args.first().map(|s| s.as_str()) == Some("set") {
+                if args.len() < 3 {
+                    eprintln!("usage: dimd config set section.key value");
+                    std::process::exit(2);
+                }
+                let k = &args[1];
+                let v = &args[2];
+                if ipc::alive(&config::sock_file()) {
+                    match ipc::send(&config::sock_file(),
+                                    &json!({"cmd": "config",
+                                            "set": {k: v}})) {
+                        Ok(r) if r.get("ok") == Some(&json!(true)) => {}
+                        Ok(r) => {
+                            eprintln!("error: {}",
+                                r.get("error")
+                                    .and_then(|e| e.as_str())
+                                    .unwrap_or("config set failed"));
+                            std::process::exit(1);
+                        }
+                        Err(e) => { eprintln!("error: {e}");
+                                    std::process::exit(1); }
+                    }
+                } else {
+                    let (sec, key) =
+                        k.split_once('.').unwrap_or(("", ""));
+                    if let Err(e) = config::set_config(sec, key, v) {
+                        eprintln!("error: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                println!("{k} = {v}");
+                0
+            } else if ipc::alive(&config::sock_file()) {
+                match ipc::send(&config::sock_file(),
+                                &json!({"cmd": "config"})) {
+                    Ok(r) => {
+                        println!("{}", serde_json::to_string_pretty(
+                            r.get("config").unwrap_or(&json!({}))).unwrap());
+                        0
+                    }
+                    Err(e) => { eprintln!("dimd unreachable: {e}"); 1 }
+                }
+            } else {
+                println!("{}", serde_json::to_string_pretty(
+                    &flat_config(&config::load().raw)).unwrap());
+                0
+            }
+        }
         _ => {
-            eprintln!("usage: dimd [daemon|trigger|status|stop|choice|task_status|task_cancel]");
+            eprintln!("usage: dimd [daemon|trigger|status|stop|choice|task_status|task_cancel|learn|harness|config [set k v]]");
             2
         }
     };
@@ -64,7 +119,7 @@ fn client(cmd: &Value, spawn_if_down: bool) -> i32 {
         }
         // inline fallback: run the listen cycle in-process (Python parity)
         let cfg = config::load();
-        let st = state::State::new(config::state_file());
+        let st = Arc::new(state::State::new(config::state_file()));
         let ctl = pipeline::ChoiceCtl {
             pick: std::sync::Mutex::new(String::new()),
             event: std::sync::Condvar::new(),
@@ -109,7 +164,13 @@ fn daemon() -> i32 {
 
     let handler = Arc::new(move |cmd: Value| -> Value {
         match cmd.get("cmd").and_then(|c| c.as_str()).unwrap_or("") {
-            "status" => json!({"ok": true, "state": st_h.snapshot()}),
+            "status" => {
+                // refresh tasks + republish state.json — Python dimd
+                // calls st.transition(st.status) here
+                let cur = st_h.status();
+                st_h.transition(&cur, &[("tasks", agents::tasks())]);
+                json!({"ok": true, "state": st_h.snapshot()})
+            }
             "listen" => {
                 if busy_h.swap(true, Ordering::SeqCst) {
                     return json!({"ok": false, "error": "busy"});
@@ -156,19 +217,22 @@ fn daemon() -> i32 {
                             return json!({"ok": false,
                                 "error": "config keys must be section.key"});
                         }
-                        config::set_config(sec, key,
-                            v.as_str().unwrap_or(&v.to_string()));
+                        if let Err(e) = config::set_config(sec, key,
+                                v.as_str().unwrap_or(&v.to_string())) {
+                            return json!({"ok": false, "error": e});
+                        }
                     }
                     *cfg_h2.lock().unwrap() = config::load();
                 }
+                // parity with Python: section -> {key: string} flat map
                 json!({"ok": true,
-                       "config": cfg_h2.lock().unwrap().raw})
+                       "config": flat_config(&cfg_h2.lock().unwrap().raw)})
             }
             "stop" => {
                 running_h.store(false, Ordering::SeqCst);
                 json!({"ok": true})
             }
-            c => json!({"ok": false, "error": format!("unknown cmd {c:?}")}),
+            c => json!({"ok": false, "error": format!("unknown cmd '{c}'")}),
         }
     });
 
@@ -178,6 +242,30 @@ fn daemon() -> i32 {
         return 1;
     }
     0
+}
+
+/// Flatten the parsed TOML config into section -> {key: string} — the
+/// shape Python's flat parser returns over IPC (all values strings).
+fn flat_config(raw: &toml::Value) -> Value {
+    let mut out = serde_json::Map::new();
+    if let Some(t) = raw.as_table() {
+        for (sec, kv) in t {
+            let mut sect = serde_json::Map::new();
+            if let Some(m) = kv.as_table() {
+                for (k, v) in m {
+                    let s = match v {
+                        toml::Value::String(s) => s.clone(),
+                        toml::Value::Boolean(b) => b.to_string(),
+                        other => other.to_string().trim_matches('"')
+                            .to_string(),
+                    };
+                    sect.insert(k.clone(), json!(s));
+                }
+            }
+            out.insert(sec.clone(), Value::Object(sect));
+        }
+    }
+    Value::Object(out)
 }
 
 #[cfg(test)]

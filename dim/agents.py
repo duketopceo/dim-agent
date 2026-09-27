@@ -7,18 +7,16 @@ start reconciles dead pids.
 """
 import json
 import os
-import re
 import shutil
 import signal
 import subprocess
 from datetime import datetime, timezone
 
-from . import config
+from . import config, util
 
 
 def _slug(text: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:32]
-    return s or "task"
+    return util.slug(text, max_len=32, default="task")
 
 
 def _log_line(rec: dict, tasks_file=config.TASKS_FILE) -> None:

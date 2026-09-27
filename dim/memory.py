@@ -35,10 +35,6 @@ def _save(path, text: str, budget: int) -> str | None:
     return None
 
 
-def _bullets(text: str) -> list:
-    return [l for l in text.splitlines() if l.strip().startswith("-")]
-
-
 def edit(target: str, op: str, old: str = "", new: str = "") -> str:
     """memory tool entry: target 'memory'|'user', op add|replace|remove.
 
@@ -46,11 +42,11 @@ def edit(target: str, op: str, old: str = "", new: str = "") -> str:
     replace: rewrite the bullet containing substring `old` to `- new`
     remove: drop the bullet containing substring `old`
     """
+    if target not in ("memory", "user"):
+        return f"FAIL (target must be 'memory' or 'user', got {target!r})"
     path = MEMORY_FILE if target == "memory" else USER_FILE
     head = _MEMORY_HEAD if target == "memory" else _USER_HEAD
     budget = MEMORY_BUDGET if target == "memory" else USER_BUDGET
-    if target not in ("memory", "user"):
-        return f"FAIL (target must be 'memory' or 'user', got {target!r})"
     text = _load(path, head)
     lines = text.splitlines()
     if op == "add":
@@ -92,4 +88,23 @@ def snapshot() -> str:
                 if l.strip() and not l.startswith("# ")]
         if body:
             parts.append(f"[{label}]\n" + "\n".join(body))
+    return "\n\n".join(parts)
+
+
+def context_block(transcript: str = "") -> str:
+    """One assembled context block — memory snapshot + skills index +
+    recall top-k — shared by the Jev-state path and chat path so the two
+    injection formats can't drift."""
+    from . import recall, skills
+    parts = []
+    snap = snapshot()
+    if snap:
+        parts.append(snap)
+    sidx = skills.index_text()
+    if sidx:
+        parts.append(f"[skills]\n{sidx}")
+    if transcript:
+        rec = recall.context_for(transcript)
+        if rec:
+            parts.append(f"[recall]\n{rec}")
     return "\n\n".join(parts)

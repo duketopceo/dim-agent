@@ -42,13 +42,29 @@ def _handler(st: state_mod.State, cfg: dict, ctl: dict) -> callable:
         if c == "task_cancel":
             from dim import agents
             return {"ok": True, "result": agents.cancel(cmd.get("name", ""))}
+        if c == "learn":
+            from dim import learn
+            p = learn.weekly(7)
+            return {"ok": True,
+                    "result": p if p else "nothing to propose"}
+        if c == "harness":
+            try:
+                rc = rebuild_harness()
+                return {"ok": rc == 0,
+                        "result": "harness rebuilt" if rc == 0
+                                  else f"builder exited {rc}"}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
         if c == "config":
             set_fields = cmd.get("set") or {}
             for k, v in set_fields.items():
                 section, _, key = k.partition(".")
                 if not section or not key:
                     return {"ok": False, "error": "config keys must be section.key"}
-                config.set_config(section, key, str(v))
+                try:
+                    config.set_config(section, key, str(v))
+                except ValueError as e:
+                    return {"ok": False, "error": str(e)}
             if set_fields:  # live-reload
                 cfg.clear()
                 cfg.update(config.load_config())
@@ -251,11 +267,17 @@ def main() -> int:
                 print("usage: dimd config set section.key value",
                       file=sys.stderr)
                 return 2
-            config.set_config(section, key, v)
             try:
-                ipc.send({"cmd": "config", "set": {k: v}})
+                resp = ipc.send({"cmd": "config", "set": {k: v}})
+                if not resp.get("ok"):
+                    print(f"error: {resp.get('error')}", file=sys.stderr)
+                    return 1
             except (ConnectionError, OSError):
-                pass  # daemon down — file write still applied
+                try:
+                    config.set_config(section, key, v)  # daemon down
+                except ValueError as e:
+                    print(f"error: {e}", file=sys.stderr)
+                    return 1
             print(f"{k} = {v}")
             return 0
         import json
@@ -267,7 +289,8 @@ def main() -> int:
         return 0
     if cmd == "harness":
         return rebuild_harness()
-    print("usage: dimd [daemon|install|trigger|status|stop|choice|harness]")
+    print("usage: dimd [daemon|install|trigger|status|stop|choice"
+          "|task_status|task_cancel|learn|harness|config [set k v]]")
     return 2
 
 

@@ -29,13 +29,16 @@ routing → guarded actions. Python reference daemon + Rust parity core
 | `learn.py` | corrections → weekly human-gated criteria proposals |
 | `agents.py` | `ori opencode` background task registry (spawn/status/cancel, `tasks.jsonl`) |
 | `tools/` | toolbelt: `__init__.py` registry + tiers + `tool_schemas()`; `desktop.py`/`system.py`/`adapters.py` shell-outs |
+| `util.py` | shared slug/text helpers used by agents + skills |
 
 ## Rust modules (`rs/dimd/src/`)
 
 Mirror of `dim/`: `main.rs` (IPC dispatch), `ipc.rs`, `state.rs`,
 `config.rs`, `brain.rs` (Jev + chat clients), `pipeline.rs`,
 `tools.rs`, `agents.rs`, `session.rs`, `learn.rs`, `harness.rs`,
-`memory.rs`, `recall.rs` (rusqlite FTS5), `skills.rs`.
+`memory.rs`, `recall.rs` (rusqlite FTS5), `skills.rs`, `util.rs`
+(shared helpers incl. `run_timeout`). `tests/parity.rs` replays
+`tests/fixtures/ipc_commands.jsonl` against a live spawned daemon.
 
 ## Contracts & docs
 

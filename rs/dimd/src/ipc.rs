@@ -40,7 +40,12 @@ pub fn serve(sock: PathBuf, handler: Arc<dyn Fn(Value) -> Value + Send + Sync>,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(_) => break,
+            Err(e) => {
+                // transient accept errors (EMFILE/EINTR) must not kill
+                // the daemon — Python's accept loop continues too
+                eprintln!("accept: {e}");
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
     }
     let _ = std::fs::remove_file(&sock);

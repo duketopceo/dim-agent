@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from . import config
 
 DB_FILE = config.DATA_DIR / "recall.db"
+_KEEP = 5000  # retention cap — recall is recent-context, not an archive
 
 _SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS notes
@@ -38,6 +39,10 @@ def add(kind: str, body: str, path=None) -> None:
                 "INSERT INTO notes (kind, body, ts) VALUES (?, ?, ?)",
                 (kind, body[:4000],
                  datetime.now(timezone.utc).isoformat()))
+            db.execute(  # bounded store — drop oldest beyond retention
+                "DELETE FROM notes WHERE rowid NOT IN "
+                "(SELECT rowid FROM notes ORDER BY ts DESC LIMIT ?)",
+                (_KEEP,))
             db.commit()
         finally:
             db.close()
@@ -57,7 +62,7 @@ def index_correction(rec: dict, path=None) -> None:
 
 
 def search(query: str, k: int = 5, path=None) -> list:
-    """FTS5 top-k, newest-first on rank ties. Empty/None-safe."""
+    """FTS5 top-k; rank first, newest-first on ties. Empty/None-safe."""
     q = " ".join(w for w in query.split() if w.isalnum())
     if not q:
         return []
@@ -66,7 +71,7 @@ def search(query: str, k: int = 5, path=None) -> list:
         try:
             rows = db.execute(
                 "SELECT kind, body, ts FROM notes "
-                "WHERE notes MATCH ? ORDER BY rank LIMIT ?",
+                "WHERE notes MATCH ? ORDER BY rank, ts DESC LIMIT ?",
                 (q, k)).fetchall()
         finally:
             db.close()

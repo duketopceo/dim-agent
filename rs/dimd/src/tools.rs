@@ -36,6 +36,31 @@ pub const REGISTRY: &[(&str, &str, &str)] = &[
     ("skill_view", "safe", "read a skill's full SKILL.md by name"),
 ];
 
+/// All tool entries — static REGISTRY plus skill_<name> tools from
+/// self-authored skills (parity: Python mutates REGISTRY at daemon
+/// start and resolves skill_* dynamically).
+pub fn entries() -> Vec<(String, &'static str, String)> {
+    let mut v: Vec<(String, &'static str, String)> = REGISTRY
+        .iter()
+        .map(|(n, t, d)| (n.to_string(), *t, d.to_string()))
+        .collect();
+    v.extend(crate::skills::tool_entries());
+    v
+}
+
+pub fn get(name: &str) -> Option<()> {
+    if name.starts_with("skill_") {
+        return if crate::skills::skill_meta_exists(name) {
+            Some(()) } else { None };
+    }
+    REGISTRY.iter().find(|(n, _, _)| *n == name).map(|_| ())
+}
+
+/// Criteria text for Jev's tool question (name -> description).
+pub fn describe() -> std::collections::HashMap<String, String> {
+    entries().into_iter().map(|(n, _, d)| (n, d)).collect()
+}
+
 pub fn risk_of(name: &str) -> &'static str {
     if name.starts_with("skill_") {
         return crate::skills::skill_tier(name);
@@ -55,7 +80,7 @@ pub fn denied(cmd: &str) -> bool {
 /// OpenAI-style tool schemas derived from REGISTRY (parity with
 /// tools.tool_schemas() — one string `arg` per tool).
 pub fn tool_schemas() -> Value {
-    let arr: Vec<Value> = REGISTRY
+    let arr: Vec<Value> = entries()
         .iter()
         .map(|(name, tier, desc)| {
             json!({
@@ -179,7 +204,7 @@ pub fn run(name: &str, arg: &str, cfg: &Cfg) -> String {
         "skill_view" => crate::skills::view(arg.trim()),
         _ => match crate::skills::run_skill_tool(name, arg) {
             Some((msg, _)) => msg,
-            None => format!("SKIP (unknown tool {name})"),
+            None => format!("SKIP (tool {name:?} unavailable)"),
         },
     }
 }

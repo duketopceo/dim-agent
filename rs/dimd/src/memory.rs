@@ -27,7 +27,7 @@ pub fn edit(target: &str, op: &str, old: &str, new: &str) -> String {
         "add" => {
             let fact = if new.is_empty() { old } else { new };
             if fact.is_empty() {
-                return "FAIL (add needs a fact)".into();
+                return "FAIL (add needs new=)".into();
             }
             let b = if fact.trim_start().starts_with('-') {
                 fact.to_string()
@@ -63,7 +63,8 @@ pub fn edit(target: &str, op: &str, old: &str, new: &str) -> String {
     }
     let out = lines.join("\n").trim_end().to_string() + "\n";
     if out.len() > budget {
-        return format!("FAIL (over budget: {} chars > {budget})",
+        return format!("FAIL (over budget ({} chars > {budget}) — \
+                        remove or shorten lines)",
                        out.len());
     }
     if let Some(p) = path.parent() { std::fs::create_dir_all(p).ok(); }
@@ -95,6 +96,28 @@ pub fn snapshot() -> String {
             if !body.is_empty() {
                 parts.push(format!("[{label}]\n{}", body.join("\n")));
             }
+        }
+    }
+    parts.join("\n\n")
+}
+
+/// One assembled context block — memory snapshot + skills index +
+/// recall top-k — shared by the Jev-state and chat paths (parity with
+/// dim/memory.py::context_block).
+pub fn context_block(transcript: &str) -> String {
+    let mut parts = Vec::new();
+    let snap = snapshot();
+    if !snap.is_empty() {
+        parts.push(snap);
+    }
+    let sidx = crate::skills::index_text();
+    if !sidx.is_empty() {
+        parts.push(format!("[skills]\n{sidx}"));
+    }
+    if !transcript.is_empty() {
+        let rec = crate::recall::context_for(transcript, 3);
+        if !rec.is_empty() {
+            parts.push(format!("[recall]\n{rec}"));
         }
     }
     parts.join("\n\n")

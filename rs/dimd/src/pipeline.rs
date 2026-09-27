@@ -1,6 +1,6 @@
 //! Listen cycle: record -> whisper -> route (Jev|chat) -> execute.
 //! Parity with dim/pipeline.py, incl. timing_ms + decisions.jsonl.
-use crate::{brain, config::Cfg, learn, memory, recall, session, skills,
+use crate::{brain, config::Cfg, learn, memory, recall, session,
             state::State, tools};
 use serde_json::{json, Value};
 use std::process::Command;
@@ -35,9 +35,10 @@ impl ChoiceCtl {
 }
 
 pub fn build_questions(cfg: &Cfg) -> Value {
-    let tools_desc: serde_json::Map<String, Value> = tools::REGISTRY
+    // parity with dim/pipeline.py::JEV_QUESTIONS
+    let tools_desc: serde_json::Map<String, Value> = tools::describe()
         .iter()
-        .map(|(n, _, d)| (n.to_string(), json!(d)))
+        .map(|(n, d)| (n.clone(), json!(d)))
         .collect();
     json!({
         "route": {"type": "choice",
@@ -45,54 +46,75 @@ pub fn build_questions(cfg: &Cfg) -> Value {
             "criteria": {
                 "launch": "open, start, or close an application",
                 "tool": "a desktop/system action — window ops, workspace switch, type text, screenshot, notify, run a command, find files",
-                "agent": "spawn a background agent for a coding, research, or multi-step task",
-                "learn": "the user wants Dim to learn or remember how to do something — 'learn X', 'remember this'",
-                "act": "a multi-step desktop task — do several things, or imperative instructions",
-                "answer": "the user is asking a question or chatting — respond in text",
+                "agent": "spawn a background agent for a coding, research, or multi-step task — phrases like 'agent', 'have an agent', 'spawn', 'delegate'",
+                "learn": "the user wants Dim to learn or remember how to do something — 'learn X', 'remember this', 'add a skill for'",
+                "act": "a multi-step desktop task — do several things, or imperative instructions like 'open X and go to workspace 2' or 'type this into the window'",
+                "answer": "the user is asking a question or chatting — respond in text, no desktop action",
                 "clarify": "the request is too ambiguous to act on",
             }},
         "app": {"type": "choice",
-            "instructions": "Which application is the user asking about? 'none' if not an app request.",
+            "instructions": "Which application is the user asking about? Choose 'none' if the user is asking a question, chatting, or not requesting an app.",
             "criteria": app_criteria(cfg)},
-        "tool": {"type": "choice",
-            "instructions": "Which desktop tool does this need? 'none' if not a tool request.",
-            "criteria": tools_desc},
-        "confidence": {"type": "score",
-            "instructions": "Rate confidence 0-1 that the chosen app/tool target is correct."},
+        "action": {"type": "choice",
+            "instructions": "What should be done?",
+            "criteria": {
+                "launch": "open or start it",
+                "close": "close or quit it",
+                "type_text": "type some text",
+                "run_shell": "run a shell command",
+                "answer": "respond to the user in text — questions, chat, or anything that is not a desktop action",
+            }},
         "risk": {"type": "score",
-            "instructions": "Rate risk 0-2 of the requested action (data loss, mutation, exposure)."},
+            "instructions": "0 read-only launch, 2 mutating",
+            "criteria": ["read-only", "navigational", "mutating"]},
+        "tool": {"type": "choice",
+            "instructions": "Which tool should run? Only relevant when the route is 'tool'.",
+            "criteria": tools_desc},
         "needs_screen": {"type": "noul",
-            "instructions": "Does answering require seeing the current screen?"}
+            "instructions": "Does fulfilling this request require seeing what is on the screen — reading an error, describing a window, referencing visible content?"}
     })
 }
 
-fn app_criteria(cfg: &Cfg) -> Value {
+fn app_criteria(_cfg: &Cfg) -> Value {
+    // parity with build_questions in dim/pipeline.py: harness catalog
+    // when present (with frequency hints), else the static map
+    const NONE: &str = "no application — the user is asking a question, \
+                        chatting, or the request is unclear";
     let mut c = serde_json::Map::new();
-    c.insert("none".into(), json!("no application"));
-    // apps from config.toml [apps] table
-    if let Some(t) = cfg.raw.get("apps").and_then(|v| v.as_table()) {
-        for (k, v) in t {
-            c.insert(k.clone(),
-                     json!(v.as_str().unwrap_or(k.as_str())));
-        }
-    }
-    if c.len() == 1 {
-        for (k, d) in [("browser", "web browser"), ("terminal", "terminal"),
-                       ("files", "file manager"), ("editor", "code editor")] {
-            c.insert(k.into(), json!(d));
-        }
-    }
-    // harness apps (generic .desktop catalog or mined) take priority
     let h = crate::config::data_dir().join("harness.json");
-    if let Ok(text) = std::fs::read_to_string(h) {
-        if let Ok(v) = serde_json::from_str::<Value>(&text) {
-            if let Some(apps) = v.get("apps").and_then(|a| a.as_object()) {
-                for (k, a) in apps {
-                    c.insert(k.clone(), json!(
-                        a.get("cues").and_then(|x| x.as_str()).unwrap_or(k)));
+    let mut used_harness = false;
+    if let Ok(v) = std::fs::read_to_string(&h)
+        .and_then(|t| serde_json::from_str::<Value>(&t)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+    {
+        if let Some(apps) = v.get("apps").and_then(|a| a.as_object()) {
+            used_harness = true;
+            for (k, a) in apps {
+                let mut s = a.get("cues").and_then(|x| x.as_str())
+                    .unwrap_or(k).to_string();
+                if a.get("seen").and_then(|x| x.as_i64()).unwrap_or(0) >= 5 {
+                    s += &format!(" (frequently used: {}x)",
+                                  a["seen"].as_i64().unwrap());
                 }
+                c.insert(k.clone(), json!(s));
             }
         }
+    }
+    if !used_harness {
+        for (k, d) in [
+            ("none", NONE),
+            ("browser", "user wants a web browser or a website"),
+            ("terminal", "user wants a terminal or shell"),
+            ("files", "user wants a file manager"),
+            ("vscode", "user wants the code editor"),
+            ("music", "user wants a music player"),
+            ("settings", "user wants system settings"),
+            ("browser_new_tab", "user wants a new browser tab"),
+        ] {
+            c.insert(k.into(), json!(d));
+        }
+    } else {
+        c.insert("none".into(), json!(NONE));
     }
     learn::apply_overrides(&mut c);
     json!(c)
@@ -102,26 +124,72 @@ fn notify(msg: &str) {
     Command::new("notify-send").args(["Dim", msg]).spawn().ok();
 }
 
-fn record(cfg: &Cfg, st: &State) -> Result<std::path::PathBuf, String> {
-    let out = std::env::temp_dir().join("dim-utterance.wav");
+/// Breathing darkness: sample mic RMS via arecord, publish `level` for
+/// the overlay — parity with dim/pipeline.py::_amplitude_sampler.
+fn amplitude_sampler(seconds: u64, st: Arc<State>) {
+    if !tools::which("arecord") {
+        return;
+    }
+    use std::io::Read;
+    let mut proc = match Command::new("arecord")
+        .args(["-D", "default", "-f", "U8", "-r", "200", "-c", "1",
+               "-d", &seconds.to_string()])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let Some(mut out) = proc.stdout.take() else { return };
+    let mut chunk = [0u8; 200];
+    while let Ok(n) = out.read(&mut chunk) {
+        if n == 0 {
+            break;
+        }
+        for w in chunk[..n.saturating_sub(19)].chunks(20) {
+            let rms: f64 = w.iter()
+                .map(|b| (*b as i32 - 128).unsigned_abs() as f64)
+                .sum::<f64>() / (w.len() * 128) as f64;
+            st.set_level((rms * 6.0).min(1.0));
+        }
+    }
+    let _ = proc.wait();
+}
+
+fn record(cfg: &Cfg, st: &Arc<State>) -> Result<std::path::PathBuf, String> {
+    // keep wav under the user-only config dir — /tmp is
+    // shared/predictable (Python uses CFG_DIR too)
+    let dir = crate::config::cfg_dir();
+    std::fs::create_dir_all(&dir).ok();
+    let out = dir.join("utterance.wav");
     let secs = cfg.audio_seconds;
+    let sampler_st = st.clone();
+    std::thread::spawn(move || amplitude_sampler(secs as u64, sampler_st));
     let rec = if tools::which("pw-record") {
-        Command::new("pw-record")
-            .args(["--rate", "16000", "--channels", "1", "--format", "s16",
-                   "--sample-count", &format!("{}", 16000 * secs)])
-            .arg(&out)
-            .status()
+        crate::util::run_timeout(
+            Command::new("pw-record")
+                .args(["--rate", "16000", "--channels", "1",
+                       "--format", "s16",
+                       "--sample-count",
+                       &format!("{}", 16000 * secs)])
+                .arg(&out),
+            secs as u64 + 10)  // Python: timeout=seconds+10
     } else if tools::which("arecord") {
-        Command::new("arecord")
-            .args(["-D", "default", "-r", "16000", "-c", "1", "-f", "S16_LE",
-                   "-d", &secs.to_string()])
-            .arg(&out)
-            .status()
+        crate::util::run_timeout(
+            Command::new("arecord")
+                .args(["-D", "default", "-r", "16000", "-c", "1",
+                       "-f", "S16_LE", "-d", &secs.to_string()])
+                .arg(&out),
+            secs as u64 + 10)
     } else {
         return Err("no pw-record or arecord found".into());
     };
+    // pw-record exits 1 on clean --sample-count shutdown (pipewire
+    // 1.6.x) — trust the output file, not the exit code (Python parity)
     let _ = rec;
     std::thread::sleep(std::time::Duration::from_millis(300));
+    st.set_level(0.0);
     let ok = std::fs::metadata(&out).map(|m| m.len() > 44).unwrap_or(false);
     if ok { Ok(out) } else {
         Err(format!("recording produced no audio: {}", out.display()))
@@ -134,13 +202,15 @@ fn transcribe(wav: &std::path::Path, cfg: &Cfg) -> Result<String, String> {
                            cfg.whisper_bin.display(),
                            cfg.whisper_model.display()));
     }
-    let out = Command::new(&cfg.whisper_bin)
-        .args(["-m"])
-        .arg(&cfg.whisper_model)
-        .args(["-nt", "-f"])
-        .arg(wav)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let out = crate::util::run_timeout(
+        Command::new(&cfg.whisper_bin)
+            .args(["-m"])
+            .arg(&cfg.whisper_model)
+            .args(["-nt", "-f"])
+            .arg(wav),
+        120)  // Python: subprocess.run(timeout=120)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "whisper timed out".to_string())?;
     Ok(String::from_utf8_lossy(&out.stdout).split_whitespace()
         .collect::<Vec<_>>().join(" "))
 }
@@ -162,26 +232,45 @@ fn capture_screen_b64() -> Option<String> {
     if !tools::which("grim") {
         return None;
     }
-    let f = std::env::temp_dir().join("dim-screen.png");
-    let ok = Command::new("grim").arg(&f).output()
-        .map(|o| o.status.success()).unwrap_or(false);
+    let dir = crate::config::runtime_dir();
+    std::fs::create_dir_all(&dir).ok();
+    let f = dir.join("screen.png");
+    let ok = crate::util::run_timeout(
+        Command::new("grim").arg(&f), 10)
+        .map(|o| o.map(|x| x.status.success()).unwrap_or(false))
+        .unwrap_or(false);
     if !ok {
         return None;
     }
     let bytes = std::fs::read(&f).ok()?;
+    std::fs::remove_file(&f).ok();  // Python unlinks after reading
     Some(format!("data:image/png;base64,{}", base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD, bytes)))
 }
 
 fn is_low_confidence(answers: &Value, cfg: &Cfg) -> bool {
-    answers.get("confidence").and_then(|c| c.get("score"))
+    // parity: Python gates on the app question's own confidence field
+    answers.get("app").and_then(|a| a.get("confidence"))
         .and_then(|v| v.as_f64())
         .map(|s| s < cfg.confidence_ambiguous)
         .unwrap_or(false)
 }
 
-fn answer_text(transcript: &str, cfg: &Cfg, session: &str,
-               needs_screen: bool) -> String {
+/// Canned reply when the answer model fails — parity with
+/// dim/pipeline.py::answer_text.
+fn canned_reply(transcript: &str) -> String {
+    let low = transcript.to_lowercase();
+    if low.contains("what can") || low.contains("help")
+        || low.contains("commands") {
+        return "Try \"open discord\", \"screenshot\", \
+                \"go to workspace 2\", or \"agent, research X\" — \
+                I route to apps, tools, and agents.".into();
+    }
+    format!("You said: \"{transcript}\". Not a desktop action I can take yet.")
+}
+
+fn ask_chat(transcript: &str, cfg: &Cfg, session: &str,
+            needs_screen: bool) -> Result<String, String> {
     let img = if needs_screen && cfg.screenshots {
         capture_screen_b64().into_iter().collect::<Vec<_>>()
     } else {
@@ -192,19 +281,14 @@ fn answer_text(transcript: &str, cfg: &Cfg, session: &str,
                   If a screenshot is attached, describe what is relevant. \
                   To point at a screen element, append [POINT:x,y:label]."
         .to_string();
-    let snap = memory::snapshot();
-    if !snap.is_empty() {
-        system.push_str(&format!("\n\n{snap}"));
-    }
-    let sidx = skills::index_text();
-    if !sidx.is_empty() {
-        system.push_str(&format!("\n\nLearned skills:\n{sidx}"));
+    let block = memory::context_block("");
+    if !block.is_empty() {
+        system.push_str(&format!("\n\n{block}"));
     }
     brain::chat(cfg, &system, transcript, session, &img, None)
-        .ok()
         .and_then(|m| m.get("content").and_then(|c| c.as_str())
-            .map(|s| s.trim().to_string()))
-        .unwrap_or_else(|| "I heard you, but my answer model failed.".into())
+            .map(|s| s.trim().to_string())
+            .ok_or_else(|| "empty chat reply".to_string()))
 }
 
 /// Bounded tool-call loop — parity with dim/act.py.
@@ -318,7 +402,7 @@ fn tail(steps: &[(String, String, String)]) -> String {
 
 /// Full listen cycle — contract states: listening→transcribing→deciding
 /// →(awaiting_choice)→acting→done|error.
-pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
+pub fn run_listen(cfg: &Cfg, st: &Arc<State>, ctl: &ChoiceCtl,
                   running: Arc<AtomicBool>) -> i32 {
     let t0 = Instant::now();
     let mut timing = serde_json::Map::new();
@@ -349,17 +433,9 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
         if !session_text.is_empty() {
             context.push_str(&format!("\nRecent conversation:\n{session_text}"));
         }
-        let snap = memory::snapshot();
-        if !snap.is_empty() {
-            context.push_str(&format!("\n{snap}"));
-        }
-        let sidx = skills::index_text();
-        if !sidx.is_empty() {
-            context.push_str(&format!("\n[skills]\n{sidx}"));
-        }
-        let rec = recall::context_for(&text, 3);
-        if !rec.is_empty() {
-            context.push_str(&format!("\n[recall]\n{rec}"));
+        let block = memory::context_block(&text);
+        if !block.is_empty() {
+            context.push_str(&format!("\n{block}"));
         }
         let answers = match cfg.router.as_str() {
             "chat" => json!({"route": {"choice": "answer"},
@@ -373,117 +449,159 @@ pub fn run_listen(cfg: &Cfg, st: &State, ctl: &ChoiceCtl,
                             - timing["record_ms"].as_u64().unwrap_or(0) as u128
                             - timing["stt_ms"].as_u64().unwrap_or(0) as u128));
 
-        // low-confidence → choice prompt
+        // low-confidence → choice prompt (parity: labels are
+        // app:X / action:Y from each question's probabilities)
         let mut answers = answers;
-        if is_low_confidence(&answers, cfg) {
-            if let Some(cands) = answers.pointer("/app/candidates")
-                .and_then(|c| c.as_array()) {
-                let labels: Vec<Value> = cands.iter().take(3)
-                    .filter_map(|c| c.get("name").and_then(|n| n.as_str())
-                        .map(String::from).or_else(|| c.as_str().map(String::from)))
-                    .map(Value::from).collect();
-                if !labels.is_empty() {
-                    st.transition("awaiting_choice",
-                                  &[("choices", json!(labels))]);
-                    if let Some(pick) = ctl.wait(30) {
-                        learn::record_correction(&text, &pick, &answers);
-                        recall::index_correction(&text, &pick);
-                        if let Some(app) = answers.get_mut("app") {
-                            app["choice"] = json!(pick);
-                        }
-                        answers["corrected_by_user"] = json!(true);
+        let low_conf = is_low_confidence(&answers, cfg);
+        let mut corrected = false;
+        if low_conf {
+            let top3 = |q: &str| -> Vec<String> {
+                let mut v: Vec<(String, f64)> = answers
+                    .pointer(&format!("/{q}/probabilities"))
+                    .and_then(|p| p.as_object())
+                    .map(|m| m.iter()
+                        .map(|(k, x)| (k.clone(),
+                                       x.as_f64().unwrap_or(0.0)))
+                        .collect())
+                    .unwrap_or_default();
+                v.sort_by(|a, b| b.1.partial_cmp(&a.1)
+                    .unwrap_or(std::cmp::Ordering::Equal));
+                v.into_iter().take(3).map(|(k, _)| k).collect()
+            };
+            let labels: Vec<String> = top3("app").into_iter()
+                .map(|k| format!("app:{k}"))
+                .chain(top3("action").into_iter()
+                    .map(|k| format!("action:{k}")))
+                .collect();
+            if !labels.is_empty() {
+                st.transition("awaiting_choice",
+                              &[("choices", json!(labels))]);
+                let pick = ctl.wait(30);
+                st.transition("acting", &[("choices", json!([]))]);
+                if let Some(pick) = pick {
+                    // apply_choice: rewrite the app or action choice
+                    let value = pick.split_once(':')
+                        .map(|(_, v)| v).unwrap_or("");
+                    if let Some(a) = answers.get_mut(
+                            if pick.starts_with("app:") { "app" }
+                            else { "action" }) {
+                        a["choice"] = json!(value);
                     }
-                    st.transition("acting", &[("choices", json!([]))]);
+                    answers["corrected_by_user"] = json!(true);
+                    corrected = true;
+                    learn::record_correction(&text, &pick, &answers);
+                    recall::index_correction(&text, &pick);
                 }
             }
         }
-
-        st.transition("acting", &[]);
-        let route = answers.pointer("/route/choice")
-            .and_then(|v| v.as_str()).unwrap_or("clarify").to_string();
-        let risk = answers.pointer("/risk/score")
-            .and_then(|v| v.as_f64()).unwrap_or(0.0);
-        if !matches!(route.as_str(), "launch" | "answer")
-            && risk > cfg.risk_threshold {
-            let r = format!("BLOCKED (risk={risk:.2} > {})",
-                            cfg.risk_threshold);
-            st.transition("done", &[("result", json!(r.clone()))]);
+        if low_conf && !corrected {
+            let r = "CANCELLED (low confidence, no pick made)".to_string();
+            st.transition("done", &[("result", json!(r))]);
+            notify(&r);
+            log_decision(&json!({"ts": crate::state::now_iso(),
+                "transcript": text, "answers": answers,
+                "result": r, "corrected": false}));
             return Ok(r);
         }
 
-        let res = match route.as_str() {
-            "launch" => {
-                let app = answers.pointer("/app/choice")
-                    .and_then(|v| v.as_str()).unwrap_or("");
-                tools::run("launch", app, cfg)
-            }
-            "tool" => {
-                let name = answers.pointer("/tool/choice")
-                    .and_then(|v| v.as_str()).unwrap_or("");
-                let tier = tools::risk_of(name);
-                if tier == "shell" && tools::denied(&text) {
-                    "REFUSED (denylisted)".into()
-                } else if tier == "shell" && !cfg.allow_shell {
-                    "SKIPPED (shell disabled)".into()
-                } else if matches!(tier, "mutating" | "shell") {
-                    st.transition("awaiting_choice", &[
-                        ("choices", json!([format!("run {name}? — yes"), "no"]))]);
-                    match ctl.wait(30) {
-                        Some(p) if p.contains("yes") => {
-                            st.transition("acting", &[("choices", json!([]))]);
-                            tools::run(name, &text, cfg)
-                        }
-                        _ => format!("SKIPPED ({name} declined)"),
-                    }
-                } else {
-                    tools::run(name, &text, cfg)
-                }
-            }
-            "agent" => crate::agents::spawn(&text),
-            "act" => act_loop(&text, cfg, st, ctl),
-            "learn" => act_loop(&format!(
+        st.transition("acting", &[]);
+        // execute() — parity with dim/pipeline.py route-aware dispatch.
+        // Risk gate applies to mutating work only; a plain launch or a
+        // text answer is never blocked (Jev's launch score band straddles
+        // the navigational/mutating line).
+        let route = answers.pointer("/route/choice")
+            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let action = answers.pointer("/action/choice")
+            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let app = answers.pointer("/app/choice")
+            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let risk = answers.pointer("/risk/score")
+            .and_then(|v| v.as_f64()).unwrap_or(2.0);
+        let gated = !matches!(route.as_str(), "launch" | "answer")
+            && !matches!(action.as_str(), "launch" | "answer");
+
+        let res = if gated && risk > cfg.risk_threshold {
+            format!("BLOCKED (risk={risk:.2} > {})", cfg.risk_threshold)
+        } else if route == "agent" {
+            crate::agents::spawn(
+                if !text.is_empty() { &text } else { &app })
+        } else if route == "act" {
+            act_loop(&text, cfg, st, ctl)
+        } else if route == "learn" {
+            act_loop(&format!(
                 "Author a reusable skill for this request using the \
                  skill_manage and skill_view tools. If a skill on this \
                  topic already exists, view it and fold improvements in \
                  with edit; otherwise create it. Keep the SKILL.md body \
                  concise and procedural. Request: {text}"),
-                cfg, st, ctl),
-            "answer" => {
-                let needs = answers.pointer("/needs_screen/noul")
-                    .and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.5;
-                let reply = answer_text(&text, cfg, &session_text, needs);
-                st.transition("done", &[("result", json!("ANSWERED")),
-                                        ("answer", json!(reply.clone()))]);
-                if cfg.voice_out {
-                    speak(&reply);
-                }
-                session::append_turn(&text, "answer", &reply, "ANSWERED");
-                recall::index_turn(&text, &reply, "ANSWERED");
-                timing.insert("act_ms".into(), json!(t0.elapsed().as_millis()));
-                log_decision(&json!({"transcript": text, "answers": answers,
-                                     "result": "ANSWERED",
-                                     "timing_ms": timing}));
-                return Ok("ANSWERED".into());
+                cfg, st, ctl)
+        } else if route == "tool" {
+            let name = answers.pointer("/tool/choice")
+                .and_then(|v| v.as_str()).unwrap_or("");
+            let tier = tools::risk_of(name);
+            if tier == "shell" && tools::denied(&text) {
+                "REFUSED (denylisted command)".into()
+            } else if tier == "shell" && !cfg.allow_shell {
+                "BLOCKED (shell tool needs allow_shell=true in config)".into()
+            } else if tier == "mutating" && risk > cfg.risk_threshold {
+                format!("BLOCKED (tool {name:?} needs confirmation)")
+            } else if tier == "safe" || risk <= cfg.risk_threshold {
+                tools::run(name, &text, cfg)
+            } else {
+                format!("BLOCKED (tool {name:?} needs confirmation)")
             }
-            _ => "CLARIFY (request too ambiguous)".into(),
+        } else if route == "answer" || action == "answer" || app == "none" {
+            // screen_b64 parity: screenshot when needs>=0.7 or the
+            // answer route fired
+            let needs = route == "answer"
+                || answers.pointer("/needs_screen/noul")
+                    .and_then(|v| v.as_f64()).unwrap_or(0.0) >= 0.7;
+            let (reply, result) = match ask_chat(&text, cfg,
+                                               &session_text, needs) {
+                Ok(r) => (r, "ANSWERED".to_string()),
+                Err(e) => (canned_reply(&text),
+                           format!("ANSWER_FAILED ({e})")),
+            };
+            st.transition("done", &[("result", json!(result.clone())),
+                                    ("answer", json!(reply.clone()))]);
+            if cfg.voice_out {
+                speak(&reply);
+            }
+            session::append_turn(&text, &route, &reply, &result);
+            recall::index_turn(&text, &reply, &result);
+            timing.insert("act_ms".into(), json!(t0.elapsed().as_millis()));
+            log_decision(&json!({"ts": crate::state::now_iso(),
+                "transcript": text, "answers": answers, "result": result,
+                "timing_ms": timing, "corrected": corrected}));
+            notify(&result);
+            return Ok(result);
+        } else if route == "launch" || action == "launch" {
+            tools::run("launch", &app, cfg)
+        } else if tools::get(&action).is_some() {
+            tools::run(&action, &text, cfg)
+        } else {
+            format!("SKIP (route={route:?} action={action:?} unhandled)")
         };
         session::append_turn(&text, &route, "", &res);
         recall::index_turn(&text, "", &res);
         st.transition("done", &[("result", json!(res.clone()))]);
+        timing.insert("act_ms".into(), json!(t0.elapsed().as_millis()));
+        log_decision(&json!({"ts": crate::state::now_iso(),
+            "transcript": text, "answers": answers, "result": res,
+            "timing_ms": timing, "corrected": corrected}));
         Ok(res)
     })();
 
     match result {
         Ok(r) => {
             notify(&r);
-            timing.insert("act_ms".into(), json!(t0.elapsed().as_millis()));
-            log_decision(&json!({"result": r, "timing_ms": timing}));
             0
         }
         Err(e) => {
             st.transition("error", &[("error", json!(e.clone()))]);
-            log_decision(&json!({"result": format!("ERROR ({e})"),
-                                 "timing_ms": timing}));
+            log_decision(&json!({"ts": crate::state::now_iso(),
+                "result": format!("ERROR ({e})"),
+                "timing_ms": timing}));
             notify(&format!("error: {e}"));
             1
         }

@@ -30,16 +30,20 @@ FloatingWindow {
   property int tab: 0
 
   function dimd(args) {
+    if (cmdProc.running) return;
     cmdProc.command = ["dimd"].concat(args);
     cmdProc.running = true;
   }
 
   function svc(args) {
+    if (svcProc.running) return;
     svcProc.command = ["systemctl", "--user"].concat(args).concat(["dimd"]);
     svcProc.running = true;
   }
 
-  Process { id: cmdProc; command: ["dimd", "status"] }
+  Process { id: cmdProc; command: ["dimd", "status"]
+            onExited: if (command[1] === "config" && command[2] === "set"
+                          && !cfgProc.running) cfgProc.running = true; }
   Process { id: svcProc; command: ["systemctl", "--user", "status", "dimd"] }
 
   // config fetch: dimd config prints JSON when daemon up; parse stdout
@@ -128,22 +132,18 @@ FloatingWindow {
       onStreamFinished: win.skillsList = this.text
     }
   }
+  // All FileViews already watch+reload on change; timers only cover
+  // things that aren't file-watched — the skills listing (only while
+  // the Memory tab is visible) and a slow config refresh.
   Timer {
-    interval: 2000; running: true; repeat: true
-    onTriggered: { memoryView.reload(); userView.reload();
-                   skillsProc.running = true; }
-  }
-
-  Timer {
-    interval: 500; running: true; repeat: true
-    onTriggered: { stateView.reload(); decisionsView.reload();
-                   sessionView.reload(); corrView.reload(); }
+    interval: 2000; running: win.tab === 3; repeat: true
+    onTriggered: if (!skillsProc.running) skillsProc.running = true;
   }
   Timer {
-    interval: 5000; running: true; repeat: true
-    onTriggered: { cfgProc.running = false; cfgProc.running = true; }
+    interval: 10000; running: true; repeat: true
+    onTriggered: if (!cfgProc.running) cfgProc.running = true;
   }
-  Component.onCompleted: cfgProc.running = true
+  Component.onCompleted: { cfgProc.running = true; skillsProc.running = true; }
 
   readonly property color fg: "#c0caf5"
   readonly property color dim: "#9aa5ce"

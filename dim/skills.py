@@ -19,7 +19,7 @@ import shlex
 import shutil
 import subprocess
 
-from . import config
+from . import config, util
 
 SKILLS_DIR = config.DATA_DIR / "skills"
 
@@ -35,8 +35,7 @@ description: {desc}
 
 
 def _slug(name: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:48]
-    return s or "skill"
+    return util.slug(name, max_len=48, default="skill")
 
 
 def _dir(name: str):
@@ -89,10 +88,12 @@ def view(name: str) -> str:
 def manage(op: str, name: str, body: str = "",
            description: str = "", filename: str = "") -> str:
     """skill_manage: create|edit|delete|write_file|remove_file|list."""
-    d = _dir(name) if name else SKILLS_DIR
     if op == "list":
         names = [s["name"] for s in index()]
         return "OK " + (", ".join(names) if names else "(no skills)")
+    if not name.strip():
+        return "FAIL (skill name required)"
+    d = _dir(name)
     if op == "create":
         if (d / "SKILL.md").exists():
             return f"FAIL (skill {_slug(name)!r} exists — use edit)"
@@ -121,6 +122,8 @@ def manage(op: str, name: str, body: str = "",
         (d / filename).write_text(body)
         return f"OK (wrote {_slug(name)}/{filename})"
     if op == "remove_file":
+        if not filename or "/" in filename or ".." in filename:
+            return "FAIL (remove_file needs a bare filename)"
         f = d / filename
         if not f.exists():
             return f"FAIL (no file {_slug(name)}/{filename})"
@@ -144,9 +147,53 @@ def run_view(arg: str) -> str:
     return view(arg.strip())
 
 
+def _skill_meta(name: str) -> dict | None:
+    """Frontmatter for a skill_<name> tool name, or None."""
+    if not name.startswith("skill_"):
+        return None
+    # slug the suffix — the name comes from a model tool call and must
+    # never resolve outside SKILLS_DIR
+    f = SKILLS_DIR / _slug(name[6:]) / "SKILL.md"
+    try:
+        return _frontmatter(f.read_text())
+    except OSError:
+        return None
+
+
+def tier_of(name: str) -> str:
+    """Risk tier for a skill_<name> tool — `tier:` frontmatter, shell by
+    default (the script is arbitrary code)."""
+    meta = _skill_meta(name) or {}
+    tier = meta.get("tier", "shell")
+    return tier if tier in ("safe", "mutating", "shell") else "shell"
+
+
+def run_tool(name: str, arg: str) -> str | None:
+    """Execute a skill_<name>'s declared `tool:` script. None when the
+    skill or its script doesn't exist."""
+    meta = _skill_meta(name)
+    script = (meta or {}).get("tool", "")
+    if not script or "/" in script or ".." in script:
+        return None
+    sp = SKILLS_DIR / _slug(name[6:]) / script
+    if not sp.is_file():
+        return None
+    bash = shutil.which("bash")
+    if not bash:
+        return "SKIP (no bash)"
+    try:
+        r = subprocess.run([bash, str(sp)] + shlex.split(arg),
+                           capture_output=True, text=True, timeout=60)
+        return (r.stdout or r.stderr).strip()[:2000] or \
+            f"(exit {r.returncode})"
+    except subprocess.TimeoutExpired:
+        return "FAIL (skill script timed out)"
+
+
 def register_tools() -> None:
-    """Register `skill_<name>` toolbelt entries for skills declaring
-    `tool: <file>`. Called at daemon start."""
+    """Register `skill_<name>` toolbelt entries so they appear in
+    tool_schemas()/describe(). risk_of()/run() also resolve them
+    dynamically — skills authored mid-session work without restart."""
     from . import tools
     if not SKILLS_DIR.is_dir():
         return
@@ -158,32 +205,10 @@ def register_tools() -> None:
             meta = _frontmatter(f.read_text())
         except OSError:
             continue
-        script = meta.get("tool")
-        if not script or "/" in script or ".." in script:
+        if not meta.get("tool"):
             continue
-        script_path = d / script
-        if not script_path.is_file():
-            continue
-        tier = meta.get("tier", "shell")
-        if tier not in tools.RISK:
-            tier = "shell"
         name = f"skill_{_slug(d.name)}"
-
-        def make_fn(sp):
-            def fn(arg: str) -> str:
-                bash = shutil.which("bash")
-                if not bash:
-                    return "SKIP (no bash)"
-                try:
-                    r = subprocess.run(
-                        [bash, str(sp)] + shlex.split(arg),
-                        capture_output=True, text=True, timeout=60)
-                    return (r.stdout or r.stderr).strip()[:2000] or \
-                        f"(exit {r.returncode})"
-                except subprocess.TimeoutExpired:
-                    return "FAIL (skill script timed out)"
-            return fn
-
         tools.REGISTRY[name] = (
-            make_fn(script_path), tier,
-            meta.get("description", f"skill {d.name}"))
+            lambda arg, _n=name: run_tool(_n, arg) or
+            f"SKIP ({_n} script missing)",
+            tier_of(name), meta.get("description", f"skill {d.name}"))

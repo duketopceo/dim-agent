@@ -24,7 +24,10 @@ def append_turn(transcript: str, route: str = "", reply: str = "",
 
 def tail(n: int = 8, path=config.SESSION_FILE) -> list[dict]:
     try:
-        lines = path.read_text().splitlines()
+        with path.open("rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 65536))  # tail only the last 64KB
+            lines = f.read().decode("utf-8", "replace").splitlines()
     except OSError:
         return []
     out = []

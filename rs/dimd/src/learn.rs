@@ -125,6 +125,8 @@ pub fn weekly(days: i64) -> String {
 }
 
 /// Merge approved overrides (never auto-applied).
+/// Parity API — invoked from the UI/CLI approval flow, not yet wired.
+#[allow(dead_code)]
 pub fn approve(overrides: &Value) {
     let mut cur = load_overrides();
     if let Some(app_new) = overrides.get("app").and_then(|v| v.as_object()) {

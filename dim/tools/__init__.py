@@ -41,6 +41,12 @@ REGISTRY = {
 }
 
 
+# registry entries whose executor lives outside REGISTRY[0] — the
+# dispatch in run() owns these names; tool_schemas must not drop them.
+EXTERN = frozenset({"agent_spawn", "task_status", "task_cancel",
+                    "memory", "recall", "skill_manage", "skill_view"})
+
+
 def get(name: str):
     return REGISTRY.get(name)
 
@@ -56,9 +62,7 @@ def tool_schemas() -> list:
     act loop automatically."""
     out = []
     for name, (fn, tier, desc) in REGISTRY.items():
-        if fn is None and name not in ("agent_spawn", "task_status",
-                                       "task_cancel", "memory", "recall",
-                                       "skill_manage", "skill_view"):
+        if fn is None and name not in EXTERN:
             continue
         out.append({
             "type": "function",
@@ -80,6 +84,9 @@ def tool_schemas() -> list:
 
 
 def risk_of(name: str) -> str:
+    if name.startswith("skill_"):
+        from .. import skills
+        return skills.tier_of(name)  # dynamic — skills can appear mid-session
     entry = REGISTRY.get(name)
     return entry[1] if entry else "shell"
 
@@ -106,6 +113,11 @@ def run(name: str, arg: str, cfg: dict, harness: dict | None = None) -> str:
     if name == "skill_view":
         from .. import skills
         return skills.run_view(arg)
+    if name.startswith("skill_"):
+        from .. import skills
+        out = skills.run_tool(name, arg)
+        return out if out is not None \
+            else f"SKIP (tool {name!r} unavailable)"
     entry = REGISTRY.get(name)
     if entry is None or entry[0] is None:
         return f"SKIP (tool {name!r} unavailable)"

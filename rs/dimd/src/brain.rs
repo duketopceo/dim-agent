@@ -21,6 +21,8 @@ fn post(url: &str, key: &str, body: &Value) -> Result<Value, String> {
 }
 
 /// One typed Jev question. kinds: "noul" | "choice" | "score".
+/// Parity API — not yet called; the learn/proposal path will use it.
+#[allow(dead_code)]
 pub fn jev_question(kind: &str, text: &str, criteria: Option<Value>) -> Value {
     let mut q = json!({"type": kind, "question": text});
     if let Some(c) = criteria {

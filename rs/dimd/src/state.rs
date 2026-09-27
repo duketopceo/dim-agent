@@ -38,6 +38,16 @@ impl State {
         write_atomic(&self.file, &snap);
     }
 
+    /// Publish mic level without a status change (breathing overlay).
+    pub fn set_level(&self, level: f64) {
+        let snap = {
+            let mut g = self.inner.lock().unwrap();
+            g.insert("level".into(), json!(level));
+            g.clone()
+        };
+        write_atomic(&self.file, &snap);
+    }
+
     pub fn snapshot(&self) -> Value {
         json!(self.inner.lock().unwrap().clone())
     }
@@ -58,20 +68,22 @@ pub fn now_iso() -> String {
 }
 
 fn now() -> String {
-    let secs = std::time::SystemTime::now()
+    let d = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    // ISO-8601 without chrono: seconds → civil date
-    iso8601(secs)
-}
-
-fn iso8601(secs: u64) -> String {
+        .unwrap();
+    // ISO-8601 without chrono; `+00:00` + microseconds to match
+    // Python's datetime.now(timezone.utc).isoformat()
+    let secs = d.as_secs();
     let days = secs / 86400;
     let rem = secs % 86400;
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    let (y, mo, d) = civil(days as i64);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+    let (y, mo, dd) = civil(days as i64);
+    let frac = if d.subsec_micros() > 0 {
+        format!(".{:06}", d.subsec_micros())
+    } else {
+        String::new()
+    };
+    format!("{y:04}-{mo:02}-{dd:02}T{h:02}:{m:02}:{s:02}{frac}+00:00")
 }
 fn civil(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;

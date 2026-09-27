@@ -260,14 +260,10 @@ def ask_chat(transcript: str, cfg: dict, session_text: str = "",
              "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
         ]
     messages = [{"role": "system", "content": system}]
-    from . import memory, skills
-    snap = memory.snapshot()
-    if snap:
-        messages.append({"role": "system", "content": snap})
-    sidx = skills.index_text()
-    if sidx:
-        messages.append({"role": "system",
-                         "content": f"Learned skills:\n{sidx}"})
+    from . import memory
+    block = memory.context_block()
+    if block:
+        messages.append({"role": "system", "content": block})
     if session_text:
         messages.append({"role": "system",
                          "content": f"Recent conversation:\n{session_text}"})
@@ -464,16 +460,10 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
         session_text = session.as_text(session.tail(n_turns))
         if session_text:
             context += f"\nRecent conversation:\n{session_text}"
-        from . import memory, recall, skills
-        snap = memory.snapshot()
-        if snap:
-            context += f"\n{snap}"
-        sidx = skills.index_text()
-        if sidx:
-            context += f"\n[skills]\n{sidx}"
-        rec = recall.context_for(text)
-        if rec:
-            context += f"\n[recall]\n{rec}"
+        from . import memory
+        block = memory.context_block(text)
+        if block:
+            context += f"\n{block}"
         resp = ask_jev(text, model, build_questions(harness), context=context)
         timing["jev_ms"] = round((time.monotonic() - t0) * 1000
                                  - timing["record_ms"] - timing["stt_ms"])
@@ -490,8 +480,11 @@ def run_listen(cfg: dict, state, wait_for_choice=None) -> int:
                     corrected = apply_choice(answers, picked)
                     from . import learn, recall as _recall
                     learn.record_correction(text, picked, answers)
-                    _recall.index_correction(
-                        {"heard": text, "picked": picked})
+                    try:
+                        _recall.index_correction(
+                            {"heard": text, "picked": picked})
+                    except Exception:
+                        pass
         if low_conf and not corrected:
             result = "CANCELLED (low confidence, no pick made)"
             state.transition("done", result=result)

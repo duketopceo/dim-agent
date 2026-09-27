@@ -11,13 +11,7 @@ fn dir() -> PathBuf {
 }
 
 fn slug(name: &str) -> String {
-    let s: String = name.to_lowercase().chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>()
-        .join("-");
-    let s: String = s.chars().take(48).collect();
-    if s.is_empty() { "skill".into() } else { s }
+    crate::util::slug(name, 48, "skill")
 }
 
 fn frontmatter(text: &str) -> HashMap<String, String> {
@@ -36,24 +30,60 @@ fn frontmatter(text: &str) -> HashMap<String, String> {
 }
 
 pub fn index_text() -> String {
-    let d = dir();
+    // one line per described skill, sorted by dir (parity: index())
+    index().into_iter()
+        .filter(|(_, d)| !d.is_empty())
+        .map(|(n, d)| format!("- {n}: {d}"))
+        .collect::<Vec<_>>().join("\n")
+}
+
+/// Names + descriptions sorted by directory (parity with index() in
+/// dim/skills.py) — basis for both `list` and `index_text`.
+fn index() -> Vec<(String, String)> {
     let mut out = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(&d) {
-        for e in rd.flatten() {
-            let f = e.path().join("SKILL.md");
-            if let Ok(text) = std::fs::read_to_string(&f) {
-                let fm = frontmatter(&text);
-                let name = fm.get("name").cloned()
-                    .unwrap_or_else(|| e.file_name().to_string_lossy().into());
-                let desc = fm.get("description").cloned().unwrap_or_default();
-                if !desc.is_empty() {
-                    out.push(format!("- {name}: {desc}"));
-                }
-            }
+    if let Ok(rd) = std::fs::read_dir(dir()) {
+        let mut ents: Vec<_> = rd.flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.join("SKILL.md").is_file())
+            .collect();
+        ents.sort();
+        for p in ents {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            let fm = std::fs::read_to_string(p.join("SKILL.md"))
+                .map(|t| frontmatter(&t)).unwrap_or_default();
+            out.push((fm.get("name").cloned().unwrap_or(name),
+                      fm.get("description").cloned().unwrap_or_default()));
         }
     }
-    out.sort();
-    out.join("\n")
+    out
+}
+
+/// skill_<name> entries for the tool registry (tool_schemas/describe).
+pub fn tool_entries() -> Vec<(String, &'static str, String)> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir()) {
+        let mut ents: Vec<_> = rd.flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.join("SKILL.md").is_file())
+            .collect();
+        ents.sort();
+        for p in ents {
+            let fm = std::fs::read_to_string(p.join("SKILL.md"))
+                .map(|t| frontmatter(&t)).unwrap_or_default();
+            if !fm.contains_key("tool") {
+                continue;
+            }
+            let dir_name =
+                p.file_name().unwrap().to_string_lossy().into_owned();
+            out.push((
+                format!("skill_{}", slug(&dir_name)),
+                tier_of(&fm),
+                fm.get("description").cloned()
+                    .unwrap_or_else(|| format!("skill {dir_name}")),
+            ));
+        }
+    }
+    out
 }
 
 pub fn view(name: &str) -> String {
@@ -69,17 +99,14 @@ pub fn run_manage(arg: &str) -> String {
     let name = parts.next().unwrap_or("");
     let field = parts.next().unwrap_or("");
     let body = parts.next().unwrap_or("");
+    if op != "list" && name.trim().is_empty() {
+        return "FAIL (skill name required)".into();
+    }
     let d = dir().join(slug(name));
     match op {
         "list" => {
-            let mut names: Vec<String> = Vec::new();
-            if let Ok(rd) = std::fs::read_dir(dir()) {
-                for e in rd.flatten() {
-                    if e.path().join("SKILL.md").is_file() {
-                        names.push(e.file_name().to_string_lossy().into());
-                    }
-                }
-            }
+            let names: Vec<String> =
+                index().into_iter().map(|(n, _)| n).collect();
             if names.is_empty() { "OK (no skills)".into() }
             else { format!("OK {}", names.join(", ")) }
         }
@@ -87,11 +114,16 @@ pub fn run_manage(arg: &str) -> String {
             if d.join("SKILL.md").exists() {
                 return format!("FAIL (skill {:?} exists — use edit)", slug(name));
             }
-            std::fs::create_dir_all(&d).ok();
-            std::fs::write(d.join("SKILL.md"), format!(
-                "---\nname: {}\ndescription: {}\n---\n# {}\n\n{}\n",
-                slug(name), if field.is_empty() { "(undescribed)" } else { field },
-                slug(name), if body.is_empty() { "TODO" } else { body })).ok();
+            if let Err(e) = std::fs::create_dir_all(&d)
+                .and_then(|_| std::fs::write(d.join("SKILL.md"), format!(
+                    "---\nname: {}\ndescription: {}\n---\n# {}\n\n{}\n",
+                    slug(name),
+                    if field.is_empty() { "(undescribed)" } else { field },
+                    slug(name),
+                    if body.is_empty() { "TODO" } else { body })))
+            {
+                return format!("FAIL ({e})");
+            }
             format!("OK (created {})", slug(name))
         }
         "edit" => {
@@ -102,27 +134,40 @@ pub fn run_manage(arg: &str) -> String {
             if body.is_empty() {
                 return "FAIL (edit needs the full new SKILL.md in body)".into();
             }
-            std::fs::write(&f, format!("{}\n", body.trim_end())).ok();
+            // Python: body + "\n" only when missing — trailing blank
+            // lines are preserved
+            let text = if body.ends_with('\n') {
+                body.to_string() } else { format!("{body}\n") };
+            if let Err(e) = std::fs::write(&f, text) {
+                return format!("FAIL ({e})");
+            }
             format!("OK (edited {})", slug(name))
         }
         "delete" => {
             if !d.exists() {
                 return format!("FAIL (no skill {:?})", slug(name));
             }
-            std::fs::remove_dir_all(&d).ok();
+            if let Err(e) = std::fs::remove_dir_all(&d) {
+                return format!("FAIL ({e})");
+            }
             format!("OK (deleted {})", slug(name))
         }
         "write_file" | "remove_file" => {
             if field.is_empty() || field.contains('/') || field.contains("..") {
-                return "FAIL (needs a bare filename)".into();
+                return format!("FAIL ({op} needs a bare filename)");
             }
             let f = d.join(field);
             if op == "write_file" {
-                std::fs::create_dir_all(&d).ok();
-                std::fs::write(&f, body).ok();
+                if let Err(e) = std::fs::create_dir_all(&d)
+                    .and_then(|_| std::fs::write(&f, body))
+                {
+                    return format!("FAIL ({e})");
+                }
                 format!("OK (wrote {}/{field})", slug(name))
             } else if f.exists() {
-                std::fs::remove_file(&f).ok();
+                if let Err(e) = std::fs::remove_file(&f) {
+                    return format!("FAIL ({e})");
+                }
                 format!("OK (removed {}/{field})", slug(name))
             } else {
                 format!("FAIL (no file {}/{field})", slug(name))
@@ -133,31 +178,47 @@ pub fn run_manage(arg: &str) -> String {
     }
 }
 
+fn skill_meta(name: &str) -> Option<HashMap<String, String>> {
+    let skill = name.strip_prefix("skill_")?;
+    // slug the suffix — the name comes from a model tool call and must
+    // never resolve outside the skills dir
+    let f = dir().join(slug(skill)).join("SKILL.md");
+    let text = std::fs::read_to_string(&f).ok()?;
+    Some(frontmatter(&text))
+}
+
+pub fn skill_meta_exists(name: &str) -> bool {
+    skill_meta(name).is_some()
+}
+
+fn tier_of(fm: &HashMap<String, String>) -> &'static str {
+    match fm.get("tier").map(|s| s.as_str()) {
+        Some("safe") => "safe",
+        Some("mutating") => "mutating",
+        _ => "shell",
+    }
+}
+
 /// skill_<name> dispatch: run the skill's declared `tool:` script.
 /// Returns None when no such skill tool exists.
 pub fn run_skill_tool(name: &str, arg: &str) -> Option<(String, &'static str)> {
     let skill = name.strip_prefix("skill_")?;
-    let f = dir().join(skill).join("SKILL.md");
-    let text = std::fs::read_to_string(&f).ok()?;
-    let fm = frontmatter(&text);
+    let fm = skill_meta(name)?;
     let script = fm.get("tool")?;
     if script.contains('/') || script.contains("..") {
         return None;
     }
-    let sp = dir().join(skill).join(script);
+    let sp = dir().join(slug(skill)).join(script);
     if !sp.is_file() {
         return None;
     }
-    let tier = match fm.get("tier").map(|s| s.as_str()) {
-        Some("safe") => "safe",
-        Some("mutating") => "mutating",
-        _ => "shell",
-    };
-    let out = Command::new("bash").arg(&sp)
-        .args(arg.split_whitespace())
-        .output();
+    let tier = tier_of(&fm);
+    let out = crate::util::run_timeout(
+        Command::new("bash").arg(&sp).args(split_args(arg)),
+        60);  // Python: subprocess.run(timeout=60)
     let msg = match out {
-        Ok(o) => {
+        Ok(None) => "FAIL (skill script timed out)".into(),
+        Ok(Some(o)) => {
             let s = String::from_utf8_lossy(if o.stdout.is_empty() {
                 &o.stderr
             } else {
@@ -169,7 +230,7 @@ pub fn run_skill_tool(name: &str, arg: &str) -> Option<(String, &'static str)> {
                 s
             }
         }
-        Err(e) => format!("ERROR ({e})"),
+        Err(_) => "SKIP (no bash)".into(),
     };
     Some((msg, tier))
 }
@@ -177,16 +238,29 @@ pub fn run_skill_tool(name: &str, arg: &str) -> Option<(String, &'static str)> {
 /// Risk tier for a skill_<name> tool (shell unless the skill declares
 /// lower). Unknown skill tools stay shell — safest default.
 pub fn skill_tier(name: &str) -> &'static str {
-    if let Some(skill) = name.strip_prefix("skill_") {
-        let f = dir().join(skill).join("SKILL.md");
-        if let Ok(text) = std::fs::read_to_string(&f) {
-            let fm = frontmatter(&text);
-            return match fm.get("tier").map(|s| s.as_str()) {
-                Some("safe") => "safe",
-                Some("mutating") => "mutating",
-                _ => "shell",
-            };
+    skill_meta(name).map(|fm| tier_of(&fm)).unwrap_or("shell")
+}
+
+/// Minimal shlex: whitespace-split honoring single/double quotes
+/// (parity with Python shlex.split for skill script args).
+fn split_args(arg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote = '\0';
+    for c in arg.chars() {
+        match c {
+            '\'' | '"' if quote == '\0' => quote = c,
+            _ if c == quote => quote = '\0',
+            c if c.is_whitespace() && quote == '\0' => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
         }
     }
-    "shell"
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
