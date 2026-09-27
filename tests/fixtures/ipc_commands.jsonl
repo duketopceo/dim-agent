@@ -1,0 +1,7 @@
+{"cmd": "status"}
+{"cmd": "listen"}
+{"cmd": "choice", "pick": "yes"}
+{"cmd": "task_status", "name": "research-x"}
+{"cmd": "task_cancel", "name": "research-x"}
+{"cmd": "stop"}
+{"cmd": "bogus"}
