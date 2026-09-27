@@ -62,6 +62,9 @@ base_url = "https://api.groq.com/openai/v1"
 model = "whisper-large-v3-turbo"
 # name of the env var / .env key holding the API key
 key_env = "GROQ_API_KEY"
+# vocabulary priming — project names, jargon; passed as whisper's
+# `prompt` param on the openai provider (huge accuracy win on names)
+prompt = ""
 
 [voice]
 # spoken replies via espeak/espeak-ng when true; missing binary = silent no-op

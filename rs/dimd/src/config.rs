@@ -25,6 +25,7 @@ pub struct Cfg {
     pub stt_base_url: String,
     pub stt_model: String,
     pub stt_key_env: String,
+    pub stt_prompt: String, // whisper `prompt` vocab-priming field
     pub raw: toml::Value,
 }
 
@@ -115,6 +116,7 @@ pub fn load() -> Cfg {
                         "https://api.groq.com/openai/v1"),
         stt_model: s(get(&f.stt, "model"), "whisper-large-v3-turbo"),
         stt_key_env: s(get(&f.stt, "key_env"), "GROQ_API_KEY"),
+        stt_prompt: s(get(&f.stt, "prompt"), ""),
         whisper_bin: home.join("src/whisper.cpp/build/bin/whisper-cli"),
         // audio.whisper_model is a filename under the whisper models
         // dir (Python: whisper_model() joins WHISPER_HOME/models)

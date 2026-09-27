@@ -218,6 +218,10 @@ fn transcribe_openai(wav: &std::path::Path, cfg: &Cfg)
     push(&mut body, "");
     push(&mut body, &cfg.stt_model);
     push(&mut body, &format!("--{boundary}"));
+    push(&mut body, "Content-Disposition: form-data; name=\"prompt\"");
+    push(&mut body, "");
+    push(&mut body, &cfg.stt_prompt);
+    push(&mut body, &format!("--{boundary}"));
     push(&mut body, "Content-Disposition: form-data; name=\"file\"; \
                      filename=\"utterance.wav\"");
     push(&mut body, "Content-Type: audio/wav");
