@@ -45,7 +45,7 @@ Mirror of `dim/`: `main.rs` (IPC dispatch), `ipc.rs`, `state.rs`,
 | Path | What |
 |---|---|
 | `docs/IPC_CONTRACT.md` | **frozen** socket + `state.json` + data-file contract — both cores implement it |
-| `docs/plans/` | implementation plans (latest: cross-platform companion) |
+| `docs/plans/` | implementation plans (latest: cross-platform companion); `docs/plans/units/` holds per-unit plans linked from GitHub issues |
 | `docs/HANDOFF.md` | verification checklist + residuals |
 | `tests/` | Python unittest suite (run: `python -m unittest discover -s tests`); `rs/dimd` has `cargo test` + `tests/parity.rs` |
 
