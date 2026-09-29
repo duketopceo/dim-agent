@@ -207,11 +207,14 @@ def load_env_key(name: str) -> str:
             except (OSError, subprocess.SubprocessError):
                 pass
         return ""
+    v = os.environ.get(name, "")
+    if v:
+        return v
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text().splitlines():
             if line.startswith(f"{name}="):
                 return line.split("=", 1)[1].strip()
-    return os.environ.get(name, "")
+    return ""
 
 
 def load_api_key() -> str:

@@ -248,15 +248,8 @@ def build_questions(harness: dict | None) -> dict:
 
 
 def active_window() -> dict:
-    if not shutil.which("hyprctl"):
-        return {}
-    r = subprocess.run(["hyprctl", "activewindow", "-j"],
-                       capture_output=True, text=True, env=hypr_env())
-    try:
-        w = json.loads(r.stdout)
-        return {"class": w.get("class", ""), "title": w.get("title", "")}
-    except json.JSONDecodeError:
-        return {}
+    from . import platform
+    return platform.active_window()
 
 
 def ask_jev(transcript: str, model: str, questions: dict,

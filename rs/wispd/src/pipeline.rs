@@ -732,14 +732,11 @@ pub fn run_listen(cfg: &Cfg, st: &Arc<State>, ctl: &ChoiceCtl,
 
 
 fn active_window_text() -> String {
-    let out = Command::new("hyprctl").args(["activewindow", "-j"])
-        .output().ok();
-    out.and_then(|o| serde_json::from_str::<Value>(
-        &String::from_utf8_lossy(&o.stdout)).ok())
-        .map(|w| format!("Active window: {} — {}",
-            w.get("class").and_then(|v| v.as_str()).unwrap_or(""),
-            w.get("title").and_then(|v| v.as_str()).unwrap_or("")))
-        .unwrap_or_default()
+    let w = crate::platform::active_window();
+    let cls = w.get("class").and_then(|v| v.as_str()).unwrap_or("");
+    let title = w.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    if cls.is_empty() && title.is_empty() { String::new() }
+    else { format!("Active window: {} — {}", cls, title) }
 }
 
 #[cfg(test)]

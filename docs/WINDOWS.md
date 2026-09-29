@@ -61,6 +61,7 @@ stage.
 
 ## Known residuals
 
-- Workspace/virtual-desktop switching is a documented SKIP
-- Monitor scale assumed 1 (DPI awareness needs `windows-rs`, U10)
-- Defender/AV signing friction: U10
+- Workspace/virtual-desktop switching: coming soon — needs the
+  IVirtualDesktopManager COM API; today it's an explicit SKIP
+- Monitor scale assumed 1 (DPI-aware monitors): coming soon (U10)
+- Defender/AV signing friction: coming soon (U10 packaging)

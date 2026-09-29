@@ -114,6 +114,9 @@ pub fn run_manage(arg: &str) -> String {
             if d.join("SKILL.md").exists() {
                 return format!("FAIL (skill {:?} exists — use edit)", slug(name));
             }
+            if body.is_empty() {
+                return "FAIL (create needs a SKILL.md body — no stub skills)".into();
+            }
             if let Err(e) = std::fs::create_dir_all(&d)
                 .and_then(|_| std::fs::write(d.join("SKILL.md"), format!(
                     "---\nname: {}\ndescription: {}\n---\n# {}\n\n{}\n",

@@ -8,6 +8,7 @@ Rust core) so adapters are unit-testable on any host.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -518,3 +519,65 @@ def missing_deps_hint() -> str:
                      "Screen Recording + Accessibility in System "
                      "Settings",
             "windows": "need powershell + sox (sox --waveaudio for mic); Accessibility n/a — toast via BurntToast optional"}[current()]
+
+
+def active_window() -> dict:
+    """Focused window as {"class","title"}; {} when unsupported/empty."""
+    o = current()
+    if o == "linux":
+        if not shutil.which("hyprctl"):
+            return {}
+        r = subprocess.run(["hyprctl", "activewindow", "-j"],
+                           capture_output=True, text=True)
+        try:
+            w = json.loads(r.stdout)
+            return {"class": w.get("class", ""),
+                    "title": w.get("title", "")}
+        except json.JSONDecodeError:
+            return {}
+    if o == "macos":
+        if not _which("osascript"):
+            return {}
+        script = (
+            'tell application "System Events" to set appName to '
+            'name of first process whose frontmost is true\n'
+            'tell application "System Events" to tell (first process '
+            'whose frontmost is true) to set winTitle to '
+            'name of front window\n'
+            'return appName & "\\n" & winTitle')
+        r = subprocess.run(["osascript", "-e", script],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0 or not r.stdout.strip():
+            return {}
+        cls, _, title = r.stdout.strip().partition("\n")
+        return {"class": cls, "title": title}
+    if o == "windows":
+        ps = (
+            'Add-Type @"\nusing System;\nusing System.Text;\n'
+            'using System.Runtime.InteropServices;\n'
+            'public class FG {\n'
+            '  [DllImport("user32.dll")] public static extern IntPtr '
+            'GetForegroundWindow();\n'
+            '  [DllImport("user32.dll")] public static extern int '
+            'GetWindowText(IntPtr h, StringBuilder s, int n);\n'
+            '  [DllImport("user32.dll")] public static extern uint '
+            'GetWindowThreadProcessId(IntPtr h, out uint p);\n'
+            '}\n"@\n'
+            '$h=[FG]::GetForegroundWindow()\n'
+            '$sb=New-Object System.Text.StringBuilder 512\n'
+            '[void][FG]::GetWindowText($h,$sb,512)\n'
+            '$procId=0; [void][FG]::GetWindowThreadProcessId($h,[ref]$procId)\n'
+            '$p=Get-Process -Id $procId -ErrorAction SilentlyContinue\n'
+            '[PSCustomObject]@{class=($p.ProcessName);title=$sb.ToString()} '
+            '| ConvertTo-Json -Compress')
+        try:
+            r = subprocess.run(_ps(ps), capture_output=True, text=True,
+                               timeout=8)
+            if r.returncode != 0 or not r.stdout.strip():
+                return {}
+            w = json.loads(r.stdout)
+            return {"class": w.get("class") or "",
+                    "title": w.get("title") or ""}
+        except Exception:
+            return {}
+    return {}

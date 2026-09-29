@@ -6,7 +6,7 @@
 //!
 //! Detection is `std::env::consts::OS` with a `WISP_OS` override so
 //! adapters are unit-testable on any host.
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -264,9 +264,7 @@ fn type_text_cmd_for(os: Os, dt: Desktop,
 }
 
 /// Speak `text` (child proc is killed on barge-in — caller tracks pid).
-pub fn tts_cmd(text: &str, voice_cmd: &str) -> Option<Command> {
-    tts_cmd_for(current(), text, voice_cmd)
-}
+#[cfg_attr(not(test), allow(dead_code))]
 fn tts_cmd_for(os: Os, text: &str, voice_cmd: &str) -> Option<Command> {
     if !voice_cmd.is_empty() {
         // config override wins on every OS: "{text}" placeholder or
@@ -786,13 +784,6 @@ fn monitors_for(os: Os, dt: Desktop) -> Vec<Value> {
     }
 }
 
-/// Whether a Hyprland-style keybinding installer exists — macOS hotkeys
-/// are a SKHD/portal concern, so `wispd install` only writes the bind on
-/// Linux.
-pub fn supports_hotkey_install() -> bool {
-    current() == Os::Linux && desk() == Desktop::Hyprland
-}
-
 /// Human guidance for the missing perms/tools on this OS (error text).
 pub fn missing_deps_hint() -> &'static str {
     missing_deps_hint_for(current())
@@ -903,5 +894,72 @@ mod tests {
             .contains("Screen Recording"));
         assert!(missing_deps_hint_for(Os::Windows)
             .contains("powershell"));
+    }
+}
+
+/// Focused window as {class,title} JSON — {} when unsupported/empty.
+pub fn active_window() -> Value {
+    match current() {
+        Os::Linux => {
+            let o = Command::new("hyprctl")
+                .args(["activewindow", "-j"]).output();
+            o.ok().and_then(|o| serde_json::from_str::<Value>(
+                &String::from_utf8_lossy(&o.stdout)).ok())
+                .map(|w| json!({
+                    "class": w.get("class").and_then(|v| v.as_str()).unwrap_or(""),
+                    "title": w.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                }))
+                .unwrap_or_else(|| json!({}))
+        }
+        Os::MacOS => {
+            if !crate::tools::which("osascript") { return json!({}) }
+            let script = concat!(
+                "tell application \"System Events\" to set appName to ",
+                "name of first process whose frontmost is true\n",
+                "tell application \"System Events\" to tell (first process ",
+                "whose frontmost is true) to set winTitle to ",
+                "name of front window\n",
+                "return appName & \"\\n\" & winTitle");
+            let o = Command::new("osascript").arg("-e").arg(script)
+                .output().ok();
+            o.and_then(|o| {
+                if !o.status.success() { return None }
+                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if s.is_empty() { return None }
+                let (cls, _, title) = {
+                    let mut it = s.splitn(2, '\n');
+                    (it.next().unwrap_or(""), (), it.next().unwrap_or(""))
+                };
+                Some(json!({"class": cls, "title": title}))
+            }).unwrap_or_else(|| json!({}))
+        }
+        Os::Windows => {
+            let script = concat!(
+                "Add-Type @\"\nusing System;\nusing System.Text;\n",
+                "using System.Runtime.InteropServices;\n",
+                "public class FG {\n",
+                "  [DllImport(\"user32.dll\")] public static extern IntPtr ",
+                "GetForegroundWindow();\n",
+                "  [DllImport(\"user32.dll\")] public static extern int ",
+                "GetWindowText(IntPtr h, StringBuilder s, int n);\n",
+                "  [DllImport(\"user32.dll\")] public static extern uint ",
+                "GetWindowThreadProcessId(IntPtr h, out uint p);\n",
+                "}\n\"@\n",
+                "$h=[FG]::GetForegroundWindow()\n",
+                "$sb=New-Object System.Text.StringBuilder 512\n",
+                "[void][FG]::GetWindowText($h,$sb,512)\n",
+                "$procId=0; [void][FG]::GetWindowThreadProcessId($h,[ref]$procId)\n",
+                "$p=Get-Process -Id $procId -ErrorAction SilentlyContinue\n",
+                "[PSCustomObject]@{class=($p.ProcessName);title=$sb.ToString()} ",
+                "| ConvertTo-Json -Compress");
+            ps(script).output().ok().and_then(|o| {
+                if !o.status.success() { return None }
+                serde_json::from_str::<Value>(
+                    &String::from_utf8_lossy(&o.stdout)).ok()
+            }).map(|w| json!({
+                "class": w.get("class").and_then(|v| v.as_str()).unwrap_or(""),
+                "title": w.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+            })).unwrap_or_else(|| json!({}))
+        }
     }
 }

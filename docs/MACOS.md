@@ -65,9 +65,5 @@ Tauri is the pragmatic pick).
 ## Known residuals
 
 - Monitor geometry via `system_profiler` approximates Retina scale;
-  AX/NSScreen (`core-graphics` crate) is the precise path for
-  multi-display point mapping.
-- `active_window` context is Hyprland-only for now; macOS equivalent
-  is `osascript` frontmost-app (follow-up).
-- Windows commands are stubs returning `None`/empty — U8 fills them.
-- Codesign/notarize/tray bundle: U10.
+  precise per-display point mapping via NSScreen: coming soon.
+- Codesign/notarize/tray bundle: coming soon (U10 packaging).

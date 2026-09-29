@@ -234,6 +234,11 @@ pub fn env_key(name: &str) -> Option<String> {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
     }
+    if let Ok(v) = std::env::var(name) {
+        if !v.is_empty() {
+            return Some(v);
+        }
+    }
     let env_file = cfg_dir().join(".env");
     if let Ok(text) = std::fs::read_to_string(&env_file) {
         let prefix = format!("{name}=");
@@ -243,7 +248,7 @@ pub fn env_key(name: &str) -> Option<String> {
             }
         }
     }
-    std::env::var(name).ok().filter(|v| !v.is_empty())
+    None
 }
 
 pub fn api_key() -> Result<String, String> {

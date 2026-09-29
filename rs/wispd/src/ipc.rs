@@ -98,6 +98,7 @@ mod imp {
 
 /// TCP loopback + port-file transport — used on Windows, and the code
 /// path is exercised on Linux by `tcp_roundtrip` below.
+#[cfg_attr(unix, allow(dead_code))]
 mod tcp {
     use super::*;
     use std::net::{TcpListener, TcpStream};

@@ -9,7 +9,6 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use crate::config::Cfg;
-use crate::tools;
 
 // live TTS pid; the Child itself is owned by the waiter thread
 static PROC: Mutex<Option<u32>> = Mutex::new(None);

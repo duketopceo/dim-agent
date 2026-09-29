@@ -1,7 +1,6 @@
 //! [POINT:x,y:label] extraction + screenshot→logical coord mapping —
 //! parity with wisp/points.py (canonical grammar documented there).
 use serde_json::{json, Value};
-use std::process::Command;
 
 const MAX_POINTS: usize = 32;
 const MAX_LABEL: usize = 80;

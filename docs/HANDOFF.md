@@ -27,47 +27,18 @@ weekly human-gated learning loop, generic install. 54/54 tests pass.
 
 ## Known issues / next tasks
 
-1. **End-to-end voice test still pending.** Every stage verified separately
-   (record → whisper small.en → Jev 200 → dispatch), but no confirmed
-   real Super+D run on the new machine yet.
-2. **Jev cannot emit free text** — API types are only `noul` (yes/no prob),
-   `choice`, `score`. Tool/agent args come from the transcript; `answer`
-   route uses canned `answer_text()`. Real generated answers need a second
-   OpenRouter chat model in the loop — not implemented.
-3. **QML plugin loads warning-free** after `Style.*` token fixes
-   (`Style.font.title/body/bodySmall`, `Style.spacing.*`). Overlay context
-   has no `Style` — uses literals.
-4. Legacy GTK `dim-overlay` still in repo as fallback — delete once plugin
-   is proven live.
-5. `needs_screen` context not wired; screenshot exists as a tool only.
-6. Branch `feat/dim-assistant` never merged — decide push/PR/merge on
-   the new machine.
+All Wave-2+3 units shipped; the items below are genuinely open:
 
-## v0.1-usable update (2026-09-25)
+- **Point grounding**: the model mis-grounds raw pixel coords on large
+  screenshots — pick a better-vision answer model via `[brain] default`
+  or shrink the shot before prompting (accuracy knob, not a bug).
+- **Streaming STT/TTS**: batch today; streaming voice: coming soon.
+- **Literal computer-use clicks**: Wisp points but doesn't click —
+  coming soon behind the risk gate.
+- **File/PDF attach context**: coming soon.
+- **GNOME Wayland window ops**: platform has no general window API —
+  wm ops answer `SKIP` there by design, not a stub.
+- **Windows workspaces**: virtual-desktop API needs COM — coming soon.
 
-- Route set grew: `launch | tool | agent | act | answer | clarify`.
-  `act` = `dim/act.py` bounded tool-call loop (<=8 steps, >2 consecutive
-  failures aborts): chat model drives `tools.tool_schemas()` (derived
-  from the registry), every call re-passes denylist/allow_shell/confirm
-  gates — mutating calls surface as a yes/no choice via the existing IPC
-  choice path, skipped when no chooser wired.
-- Answer/agent default: `meta-llama/llama-4-maverick` (open-weights
-  flash). No GPT-6 Astra anywhere — forbidden by user.
-- `decisions.jsonl` records now carry `timing_ms`:
-  record/stt/jev/act — latency is measurable per stage.
-- All failures write `state.json` status=error + log to decisions.jsonl;
-  UI surfaces it.
-- Shell plugin overlay is now `Companion.qml` — persistent bottom-right
-  orb (idle/listening/thinking/acting/error colors, breathes while
-  listening), click expands a card with transcript/answer/choices.
-  `WispOverlay.qml` kept in repo but no longer the entry point.
-- 83/83 tests pass; daemon + plugin synced and live on omarchy-max
-  (summon returned ok, no QML errors).
-
-### Verified live
-- Jev routes "open discord and then go to workspace two" -> act (conf 1)
-
-### Still needs a real voice run (Super+D)
-- act route end-to-end with spoken phrase
-- yes/no confirm flow on a mutating tool call
-- orb error state on a deliberately failing route
+Everything else in this doc's history shipped; see git log and
+docs/plans/units/ for per-unit status.

@@ -98,9 +98,11 @@ def manage(op: str, name: str, body: str = "",
         if (d / "SKILL.md").exists():
             return f"FAIL (skill {_slug(name)!r} exists — use edit)"
         d.mkdir(parents=True, exist_ok=True)
+        if not body:
+            return "FAIL (create needs a SKILL.md body — no stub skills)"
         (d / "SKILL.md").write_text(_TEMPLATE.format(
             name=_slug(name), desc=description or "(undescribed)",
-            body=body or "TODO"))
+            body=body))
         return f"OK (created {_slug(name)})"
     if op == "edit":
         f = d / "SKILL.md"
