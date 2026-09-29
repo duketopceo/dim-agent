@@ -4,15 +4,18 @@ import Quickshell
 import Quickshell.Io
 
 // Wisp — management app. Open/close from the launcher; the daemon stays
-// resident. Tabs: Status (live state + controls), Logs (decisions with
-// per-stage timing bars + session/corrections tails), Settings (live
-// config editing via `wispd config`), Tasks (agent registry).
+// resident. Plain-language tabs:
+//   Home     — what Wisp is doing right now + quick controls
+//   Activity — every turn: what you said, what it did, how long each stage took
+//   Memory   — the notes Wisp reads on every turn (editable)
+//   Agents   — background coding-agent tasks (spawn, watch, cancel)
+//   Settings — config.toml with descriptions, applied live
 // Everything reads files/IPC — zero coupling to daemon internals.
 
 FloatingWindow {
   id: win
   title: "Wisp"
-  minimumSize: Qt.size(820, 620)
+  minimumSize: Qt.size(860, 640)
   color: "#16161e"
 
   readonly property string rtDir: {
@@ -27,6 +30,7 @@ FloatingWindow {
   property var sessionLines: []
   property var corrections: []
   property var cfgObj: ({})
+  property var tasks: ({})
   property int tab: 0
 
   function wispd(args) {
@@ -34,27 +38,10 @@ FloatingWindow {
     cmdProc.command = ["wispd"].concat(args);
     cmdProc.running = true;
   }
-
   function svc(args) {
     if (svcProc.running) return;
     svcProc.command = ["systemctl", "--user"].concat(args).concat(["wispd"]);
     svcProc.running = true;
-  }
-
-  Process { id: cmdProc; command: ["wispd", "status"]
-            onExited: if (command[1] === "config" && command[2] === "set"
-                          && !cfgProc.running) cfgProc.running = true; }
-  Process { id: svcProc; command: ["systemctl", "--user", "status", "wispd"] }
-
-  // config fetch: wispd config prints JSON when daemon up; parse stdout
-  Process {
-    id: cfgProc
-    command: ["wispd", "config"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        try { win.cfgObj = JSON.parse(this.text); } catch (e) {}
-      }
-    }
   }
 
   FileView {
@@ -63,9 +50,12 @@ FloatingWindow {
     watchChanges: true
     onFileChanged: reload()
     onLoaded: {
-      try { win.stateObj = JSON.parse(stateView.text()); } catch (e) {}
+      try { win.stateObj = JSON.parse(stateView.text()) } catch (e) {}
     }
   }
+  Timer { interval: 400; running: true; repeat: true
+          onTriggered: stateView.reload() }
+
   FileView {
     id: decisionsView
     path: win.dataDir + "/decisions.jsonl"
@@ -74,13 +64,15 @@ FloatingWindow {
     onLoaded: {
       var out = [];
       var lines = decisionsView.text().split("\n");
-      for (var i = lines.length - 1; i >= 0 && out.length < 40; i--) {
-        if (!lines[i].trim()) continue;
-        try { out.push(JSON.parse(lines[i])); } catch (e) {}
+      for (var i = lines.length - 1; i >= 0 && out.length < 12; i--) {
+        var l = lines[i].trim();
+        if (!l) continue;
+        try { out.unshift(JSON.parse(l)) } catch (e) {}
       }
       win.decisions = out;
     }
   }
+
   FileView {
     id: sessionView
     path: win.dataDir + "/session.jsonl"
@@ -89,61 +81,58 @@ FloatingWindow {
     onLoaded: {
       var out = [];
       var lines = sessionView.text().split("\n");
-      for (var i = lines.length - 1; i >= 0 && out.length < 40; i--) {
-        if (!lines[i].trim()) continue;
-        try { out.push(JSON.parse(lines[i])); } catch (e) {}
+      for (var i = lines.length - 1; i >= 0 && out.length < 8; i--) {
+        var l = lines[i].trim();
+        if (!l) continue;
+        try { out.unshift(JSON.parse(l)) } catch (e) {}
       }
       win.sessionLines = out;
     }
   }
+
   FileView {
     id: corrView
     path: win.dataDir + "/corrections.jsonl"
     watchChanges: true
     onFileChanged: reload()
     onLoaded: {
-      var out = [];
-      var lines = corrView.text().split("\n");
-      for (var i = lines.length - 1; i >= 0 && out.length < 40; i--) {
-        if (!lines[i].trim()) continue;
-        try { out.push(JSON.parse(lines[i])); } catch (e) {}
-      }
-      win.corrections = out;
+      var lines = corrView.text().split("\n").filter(function(l){return l.trim()});
+      win.corrections = lines.slice(-6).reverse();
     }
   }
 
-  FileView {
-    id: memoryView
-    path: win.dataDir + "/MEMORY.md"
-    watchChanges: true
-    onFileChanged: reload()
-  }
-  FileView {
-    id: userView
-    path: win.dataDir + "/USER.md"
-    watchChanges: true
-    onFileChanged: reload()
-  }
-  property string skillsList: ""
+  FileView { id: memoryView; path: win.dataDir + "/MEMORY.md" }
+  FileView { id: userView;    path: win.dataDir + "/USER.md" }
+
+  // Config + tasks refresh via CLI so we exercise the same path users do.
   Process {
-    id: skillsProc
-    command: ["sh", "-c", "for d in \"$HOME/.local/share/wisp/skills\"/*/; do [ -f \"$d/SKILL.md\" ] && echo \"== $d\" && cat \"$d/SKILL.md\"; done"]
+    id: cfgProc
+    command: ["wispd", "config"]
     stdout: StdioCollector {
-      onStreamFinished: win.skillsList = this.text
+      onStreamFinished: {
+        try { win.cfgObj = JSON.parse(this.text) } catch (e) {}
+      }
     }
   }
-  // All FileViews already watch+reload on change; timers only cover
-  // things that aren't file-watched — the skills listing (only while
-  // the Memory tab is visible) and a slow config refresh.
-  Timer {
-    interval: 2000; running: win.tab === 4; repeat: true
-    onTriggered: if (!skillsProc.running) skillsProc.running = true;
+  Process {
+    id: tasksProc
+    command: ["wispd", "task_status"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try { win.tasks = JSON.parse(this.text).tasks || {} } catch (e) {}
+      }
+    }
   }
-  Timer {
-    interval: 10000; running: true; repeat: true
-    onTriggered: if (!cfgProc.running) cfgProc.running = true;
-  }
-  Component.onCompleted: { cfgProc.running = true; skillsProc.running = true; }
+  Process { id: cmdProc; command: ["wispd"]
+            onExited: { cfgProc.running = true; tasksProc.running = true } }
+  Process { id: svcProc; command: ["systemctl", "--user", "status", "wispd"] }
+  Process { id: writeProc; command: ["wispd"] }
+
+  Component.onCompleted: { cfgProc.running = true; tasksProc.running = true }
+  Timer { interval: 3000; running: win.tab === 3; repeat: true
+          onTriggered: tasksProc.running = true }
+
+  property string skillsList: ""
 
   readonly property color fg: "#c0caf5"
   readonly property color dim: "#9aa5ce"
@@ -153,11 +142,26 @@ FloatingWindow {
   readonly property color border: "#292e42"
 
   function statusColor(s) {
-    if (s === "error") return "#e05555";
-    if (s === "listening") return accent;
+    if (s === "listening") return "#7aa2f7";
     if (["transcribing","deciding"].indexOf(s) >= 0) return "#bb9af7";
-    if (["acting","awaiting_choice","speaking"].indexOf(s) >= 0) return "#9ece6a";
-    return faint;
+    if (["acting","awaiting_choice"].indexOf(s) >= 0) return "#9ece6a";
+    if (s === "speaking") return "#e0af68";
+    if (s === "error" || s === "offline") return "#e05555";
+    return "#565f89";
+  }
+  function statusBlurb(s) {
+    if (s === "listening") return "Listening — it's recording you right now";
+    if (s === "transcribing") return "Turning your speech into text";
+    if (s === "deciding") return "Thinking — the router is picking an action";
+    if (s === "acting") return "Running a tool or agent on your desktop";
+    if (s === "awaiting_choice") return "It needs you to pick an option";
+    if (s === "speaking") return "Speaking the answer out loud";
+    if (s === "done") return "Idle — last turn finished";
+    if (s === "idle") return "Idle — press " + ((win.cfgObj.hotkey||{}).mod||"SUPER")
+                                + "+" + ((win.cfgObj.hotkey||{}).key||"D") + " to talk";
+    if (s === "error") return "Something failed — check Activity";
+    if (s === "offline") return "Daemon not running";
+    return s || "offline";
   }
 
   RowLayout {
@@ -167,19 +171,18 @@ FloatingWindow {
     // ── Sidebar ──
     Rectangle {
       Layout.fillHeight: true
-      width: 150
+      width: 148
       color: card
       Column {
         anchors.fill: parent
         anchors.topMargin: 12
         spacing: 2
-        Text { text: "  DIM"; color: accent; font.pixelSize: 15
+        Text { text: "  Wisp"; color: accent; font.pixelSize: 16
                font.bold: true; bottomPadding: 12 }
         Repeater {
-          model: ["Status", "Logs", "Graphs", "Session", "Memory",
-                  "Tasks", "Settings"]
+          model: ["Home", "Activity", "Memory", "Agents", "Settings"]
           Rectangle {
-            width: 150; height: 34
+            width: 148; height: 34
             color: win.tab === index ? "#283457" : "transparent"
             Text { anchors.verticalCenter: parent.verticalCenter
                    anchors.left: parent.left; anchors.leftMargin: 14
@@ -198,500 +201,478 @@ FloatingWindow {
       Layout.fillHeight: true
       currentIndex: win.tab
 
-      // STATUS
+      // ════ HOME ════
       Item {
         Column {
-          anchors.fill: parent; anchors.margins: 16; spacing: 12
-          Row {
-            spacing: 14
-            Rectangle { width: 18; height: 18; radius: 9
-                        color: win.statusColor(win.stateObj.status || "offline") }
-            Text { text: win.stateObj.status || "offline"
-                   color: fg; font.pixelSize: 20; font.bold: true }
-            Item { width: 20 }
-            Repeater {
-              model: ["listen", "learn", "harness"]
-              Rectangle {
-                height: 30; width: bl.implicitWidth + 20; radius: 7
-                color: "#283457"
-                Text { id: bl; anchors.centerIn: parent; text: modelData
-                       color: fg; font.pixelSize: 12 }
-                MouseArea { anchors.fill: parent
-                            onClicked: win.wispd([modelData]) }
-              }
-            }
-          }
-          Row {
-            spacing: 14
-            Text { text: "daemon:"; color: faint; font.pixelSize: 11
-                   anchors.verticalCenter: parent.verticalCenter }
-            Repeater {
-              model: [["start", "start"], ["stop", "stop"],
-                      ["restart", "restart"], ["enable", "enable"],
-                      ["disable", "disable"]]
-              Rectangle {
-                height: 26; width: sbl.implicitWidth + 16; radius: 6
-                color: "#232736"
-                Text { id: sbl; anchors.centerIn: parent
-                       text: modelData[0]; color: dim; font.pixelSize: 11 }
-                MouseArea { anchors.fill: parent
-                            onClicked: win.svc([modelData[1]]) }
-              }
-            }
-            Text { text: "GUI closes; daemon stays resident"
-                   color: faint; font.pixelSize: 10
-                   anchors.verticalCenter: parent.verticalCenter }
-          }
-          Rectangle { width: parent.width; height: 1; color: border }
-          Grid {
-            columns: 2; spacing: 8; width: parent.width
-            Repeater {
-              model: [
-                ["transcript", win.stateObj.transcript || "—"],
-                ["answer", win.stateObj.answer || "—"],
-                ["result", win.stateObj.result || "—"],
-                ["error", win.stateObj.error || "—"],
-                ["choices", JSON.stringify(win.stateObj.choices || [])],
-                ["level", (win.stateObj.level || 0).toFixed(3)],
-                ["started", win.stateObj.started_at || "—"],
-              ]
-              Rectangle {
-                width: (parent.width - 8) / 2
-                height: kv.implicitHeight + 16
-                color: card; radius: 8
-                Column {
-                  id: kv; anchors.fill: parent; anchors.margins: 8
-                  spacing: 2
-                  Text { text: modelData[0]; color: faint; font.pixelSize: 10 }
-                  Text { text: modelData[1]; color: fg; font.pixelSize: 12
-                         width: kv.width; wrapMode: Text.Wrap }
-                }
-              }
-            }
-          }
-        }
-      }
+          anchors.fill: parent; anchors.margins: 20; spacing: 16
 
-      // LOGS — decisions with per-stage timing bars
-      Flickable {
-        contentHeight: logCol.implicitHeight; clip: true
-        Column {
-          id: logCol; width: parent.width; padding: 16; spacing: 6
-          // aggregate stats over the loaded window
-          Text {
-            color: faint; font.pixelSize: 11; bottomPadding: 6
-            text: {
-              var d = win.decisions;
-              if (!d.length) return "decisions.jsonl — no entries yet";
-              var routes = {}, errs = 0, tot = 0;
-              for (var i = 0; i < d.length; i++) {
-                var r = (d[i].result || "");
-                if (r.indexOf("ERROR") === 0) errs++;
-                var rt = (d[i].answers || {}).route || {};
-                var c = rt.choice || "n/a";
-                routes[c] = (routes[c] || 0) + 1;
-                if (d[i].timing_ms) tot += d[i].timing_ms.act_ms || 0;
-              }
-              var parts = [];
-              for (var k in routes) parts.push(k + ":" + routes[k]);
-              return "decisions.jsonl — " + d.length + " shown · " +
-                     errs + " errors · routes " + parts.join(" ") +
-                     " · avg pipeline " + Math.round(tot / d.length) + "ms";
-            }
-          }
-          Repeater {
-            model: win.decisions
+          Row {
+            spacing: 16
             Rectangle {
-              width: logCol.width - 32
-              height: dcol.implicitHeight + 12
-              color: card; radius: 6
-              Column {
-                id: dcol; anchors.fill: parent; anchors.margins: 6; spacing: 3
-                Text {
-                  text: (modelData.ts || "").slice(11, 19) + "  " +
-                        (modelData.transcript || "") + "  →  " +
-                        (modelData.result || "")
-                  color: fg; font.pixelSize: 11; width: dcol.width
-                  wrapMode: Text.Wrap
-                }
-                Row {
-                  spacing: 4; visible: !!modelData.timing_ms
-                  Repeater {
-                    model: modelData.timing_ms ?
-                      [["rec", modelData.timing_ms.record_ms, "#7aa2f7"],
-                       ["stt", modelData.timing_ms.stt_ms, "#bb9af7"],
-                       ["jev", modelData.timing_ms.jev_ms, "#e0af68"],
-                       ["act", modelData.timing_ms.act_ms, "#9ece6a"]] : []
-                    Rectangle {
-                      width: Math.max(14, Math.min(120,
-                        (modelData[1] || 0) / 80))
-                      height: 14; radius: 3; color: modelData[2]
-                      Text { anchors.centerIn: parent
-                             text: modelData[0] + " " + (modelData[1]||0) + "ms"
-                             color: "#16161e"; font.pixelSize: 8 }
-                    }
-                  }
-                }
+              width: 44; height: 44; radius: 22
+              color: win.statusColor(win.stateObj.status || "offline")
+              Rectangle {
+                visible: win.stateObj.status === "listening"
+                anchors.centerIn: parent
+                width: 44; height: 44; radius: 22
+                color: "transparent"; border.color: "#7aa2f7"; border.width: 2
+                opacity: 0.4 + (win.stateObj.level || 0) * 0.6
+                Behavior on opacity { NumberAnimation { duration: 120 } }
               }
             }
+            Column {
+              anchors.verticalCenter: parent.verticalCenter
+              Text { text: win.stateObj.status || "offline"
+                     color: fg; font.pixelSize: 22; font.bold: true }
+              Text { text: win.statusBlurb(win.stateObj.status || "offline")
+                     color: dim; font.pixelSize: 12 }
+            }
           }
-        }
-      }
 
-      // GRAPHS — history derived from decisions.jsonl (no new store):
-      // stacked per-stage latency bars per turn + route mix strip +
-      // error/blocked counts. Canvas charts — no QtCharts dep.
-      Item {
-        Column {
-          anchors.fill: parent; anchors.margins: 16; spacing: 14
-          Text { text: "per-turn pipeline latency (newest right)"
-                 color: faint; font.pixelSize: 11 }
-          Canvas {
-            id: latencyChart
-            width: parent.width; height: 160
-            onPaint: {
-              var ctx = getContext("2d");
-              ctx.reset();
-              var ds = win.decisions.slice().reverse(); // old→new
-              var stages = [["record_ms","#7aa2f7"],["stt_ms","#bb9af7"],
-                            ["jev_ms","#e0af68"],["act_ms","#9ece6a"]];
-              var max = 1;
-              for (var i = 0; i < ds.length; i++) {
-                var t = ds[i].timing_ms || {}, s = 0;
-                for (var j = 0; j < stages.length; j++)
-                  s += t[stages[j][0]] || 0;
-                if (s > max) max = s;
-              }
-              var bw = Math.max(3, (width - 20) / Math.max(1, ds.length));
-              for (i = 0; i < ds.length; i++) {
-                t = ds[i].timing_ms || {};
-                var y = height;
-                for (j = 0; j < stages.length; j++) {
-                  var v = t[stages[j][0]] || 0;
-                  var h = v / max * (height - 14);
-                  ctx.fillStyle = stages[j][1];
-                  ctx.fillRect(i * bw + 10, y - h, bw - 2, h);
-                  y -= h;
-                }
-              }
+          // what it heard / what it said
+          Rectangle {
+            width: parent.width - 40; height: hearCol.height + 24
+            color: card; radius: 8
+            Column {
+              id: hearCol
+              anchors.fill: parent; anchors.margins: 12; spacing: 8
+              Text { text: "Last thing it heard"; color: faint; font.pixelSize: 11 }
+              Text { text: win.stateObj.transcript || "—"
+                     color: fg; font.pixelSize: 14; width: hearCol.width
+                     wrapMode: Text.WordWrap }
+              Text { text: "What it did / said"; color: faint; font.pixelSize: 11 }
+              Text {
+                text: win.stateObj.answer || win.stateObj.result || "—"
+                color: dim; font.pixelSize: 13; width: hearCol.width
+                wrapMode: Text.WordWrap }
+              Text {
+                visible: (win.stateObj.error || "").length > 0
+                text: "Error: " + (win.stateObj.error || "")
+                color: "#e05555"; font.pixelSize: 12; width: hearCol.width
+                wrapMode: Text.WordWrap }
             }
           }
+
+          // controls
           Row {
             spacing: 10
             Repeater {
-              model: [["record","#7aa2f7"],["stt","#bb9af7"],
-                      ["jev","#e0af68"],["act","#9ece6a"]]
-              Row {
-                spacing: 4
-                Rectangle { width: 10; height: 10; radius: 2
-                            color: modelData[1] }
-                Text { text: modelData[0]; color: dim; font.pixelSize: 10 }
-              }
-            }
-          }
-          Text { text: "route mix"; color: faint; font.pixelSize: 11 }
-          Canvas {
-            id: routeStrip
-            width: parent.width; height: 34
-            onPaint: {
-              var ctx = getContext("2d");
-              ctx.reset();
-              var routes = {}, n = 0, errs = 0, blocked = 0;
-              for (var i = 0; i < win.decisions.length; i++) {
-                var d = win.decisions[i];
-                var c = ((d.answers||{}).route||{}).choice || "n/a";
-                routes[c] = (routes[c]||0)+1; n++;
-                var r = d.result || "";
-                if (r.indexOf("ERROR") === 0) errs++;
-                if (r.indexOf("BLOCKED") === 0) blocked++;
-              }
-              var pal = {"answer":"#7aa2f7","launch":"#9ece6a",
-                         "act":"#e0af68","dictation":"#bb9af7",
-                         "agent":"#f7768e","tool":"#449dab",
-                         "clarify":"#565f89","none":"#292e42",
-                         "n/a":"#292e42"};
-              var x = 0, keys = Object.keys(routes);
-              for (i = 0; i < keys.length; i++) {
-                var w = routes[keys[i]] / Math.max(1,n) * width;
-                ctx.fillStyle = pal[keys[i]] || "#414868";
-                ctx.fillRect(x, 4, w, 26);
-                x += w;
-              }
-            }
-          }
-          Text {
-            color: dim; font.pixelSize: 11
-            text: {
-              var routes = {}, n = 0, errs = 0, blocked = 0;
-              for (var i = 0; i < win.decisions.length; i++) {
-                var d = win.decisions[i];
-                var c = ((d.answers||{}).route||{}).choice || "n/a";
-                routes[c] = (routes[c]||0)+1; n++;
-                var r = d.result || "";
-                if (r.indexOf("ERROR") === 0) errs++;
-                if (r.indexOf("BLOCKED") === 0) blocked++;
-              }
-              var parts = [];
-              for (var k in routes)
-                parts.push(k + " " + Math.round(routes[k]/Math.max(1,n)*100) + "%");
-              return n + " turns · " + parts.join(" · ") +
-                     " — " + errs + " errors, " + blocked + " blocked";
-            }
-          }
-          Text { text: "window: last " + win.decisions.length +
-                       " decisions.jsonl entries"
-                 color: faint; font.pixelSize: 10 }
-        }
-        Connections {
-          target: win
-          function onDecisionsChanged() {
-            latencyChart.requestPaint(); routeStrip.requestPaint();
-          }
-        }
-        Component.onCompleted: {
-          latencyChart.requestPaint(); routeStrip.requestPaint();
-        }
-      }
-
-      // SESSION + CORRECTIONS
-      Flickable {
-        contentHeight: sessCol.implicitHeight; clip: true
-        Column {
-          id: sessCol; width: parent.width; padding: 16; spacing: 6
-          Text { text: "session.jsonl"; color: faint; font.pixelSize: 11 }
-          Repeater {
-            model: win.sessionLines
-            Text {
-              text: (modelData.ts || "").slice(5, 16) + "  " +
-                    (modelData.transcript || "") +
-                    (modelData.reply ? "  → " + modelData.reply : "")
-              color: dim; font.pixelSize: 11; width: sessCol.width - 32
-              wrapMode: Text.Wrap
-            }
-          }
-          Text { text: "corrections.jsonl"; color: faint
-                 font.pixelSize: 11; topPadding: 12 }
-          Repeater {
-            model: win.corrections
-            Text {
-              text: "heard " + (modelData.heard || "") + " → picked " +
-                    (modelData.picked || "")
-              color: "#e0af68"; font.pixelSize: 11
-              width: sessCol.width - 32; wrapMode: Text.Wrap
-            }
-          }
-        }
-      }
-
-      // MEMORY — curated memory + recall store + skills
-      Flickable {
-        contentHeight: memCol.implicitHeight; clip: true
-        Column {
-          id: memCol; width: parent.width; padding: 16; spacing: 8
-          // Editable MEMORY/USER — saves go through `wispd memory-write`
-          // → IPC `memory` cmd → memory.edit("write") — the same
-          // budgeted, headered path the tools use, not a raw write.
-          Repeater {
-            model: [["memory", "MEMORY.md", memoryView],
-                    ["user", "USER.md", userView]]
-            Column {
-              id: memCard
-              width: memCol.width - 32; spacing: 4
-              property var src: modelData[2]
-              property string tgt: modelData[0]
-              Row {
-                spacing: 8
-                Text { text: modelData[1]; color: faint; font.pixelSize: 11
-                       anchors.verticalCenter: parent.verticalCenter }
-                Rectangle {
-                  width: 46; height: 20; radius: 4; color: "#283457"
-                  Text { anchors.centerIn: parent; text: "save"
-                         color: fg; font.pixelSize: 10 }
-                  MouseArea {
-                    anchors.fill: parent
-                    onClicked: win.wispd(["memory-write", memCard.tgt,
-                                         Qt.btoa(ed.text)])
+              model: [
+                ["Talk to it", ["trigger"], "#283457"],
+                ["Restart daemon", ["__svc_restart"], "#283457"],
+                ["Stop daemon", ["__svc_stop"], "#3a2030"]
+              ]
+              Rectangle {
+                width: 110; height: 30; radius: 6; color: modelData[2]
+                Text { anchors.centerIn: parent; text: modelData[0]
+                       color: fg; font.pixelSize: 12 }
+                MouseArea {
+                  anchors.fill: parent
+                  onClicked: {
+                    if (modelData[1][0] === "__svc_restart") win.svc(["restart"]);
+                    else if (modelData[1][0] === "__svc_stop") win.svc(["stop"]);
+                    else win.wispd(modelData[1]);
                   }
                 }
-                Text { text: "edit applies via the memory tool (bounded)"
-                       color: faint; font.pixelSize: 9
-                       anchors.verticalCenter: parent.verticalCenter }
               }
+            }
+          }
+
+          // what this app is
+          Text {
+            width: parent.width - 40
+            wrapMode: Text.WordWrap
+            color: faint; font.pixelSize: 11
+            text: "This is the control room, not the assistant itself. " +
+                  "Wisp lives in your bar (the orb, bottom-right) and on " +
+                  "your hotkey — press SUPER+D anywhere and speak. " +
+                  "Everything here just watches the daemon's files, so you " +
+                  "can close this window and Wisp keeps running."
+          }
+        }
+      }
+
+      // ════ ACTIVITY ════
+      Item {
+        Flickable {
+          anchors.fill: parent; anchors.margins: 16
+          contentHeight: actCol.height
+          clip: true
+          Column {
+            id: actCol
+            width: parent.width; spacing: 10
+
+            Text {
+              width: parent.width; wrapMode: Text.WordWrap
+              color: faint; font.pixelSize: 11
+              text: "Every time you talk, a 'turn' is recorded here: what it " +
+                    "heard, what it decided, and how long each step took " +
+                    "(record → transcribe → decide → act → speak). If Wisp " +
+                    "ever does something weird, this is the replay log."
+            }
+
+            Repeater {
+              model: win.decisions
               Rectangle {
-                width: parent.width; height: Math.max(60, ed.implicitHeight + 16)
-                color: "#16161e"; radius: 6; border.color: border
-                TextEdit {
-                  id: ed
-                  anchors.fill: parent; anchors.margins: 8
-                  color: fg; font.pixelSize: 11; wrapMode: TextEdit.Wrap
-                  text: memCard.src.text()
-                  property string lastLoaded: ""
-                  Connections {
-                    target: memCard.src
-                    function onLoaded() {
-                      // reload file→editor only when not dirty
-                      if (memCard.src.text() !== ed.lastLoaded) {
-                        ed.text = memCard.src.text();
-                        ed.lastLoaded = ed.text;
+                width: actCol.width; height: dCol.height + 16
+                color: card; radius: 8
+                Column {
+                  id: dCol
+                  anchors.fill: parent; anchors.margins: 8; spacing: 5
+                  Row {
+                    spacing: 8
+                    Text { text: modelData.turn || ""
+                           color: accent; font.pixelSize: 12; font.bold: true }
+                    Text { text: "route: " + (modelData.route || "?")
+                           color: faint; font.pixelSize: 11 }
+                    Text {
+                      visible: (modelData.ms_total || 0) > 0
+                      text: (modelData.ms_total || 0) + " ms total"
+                      color: faint; font.pixelSize: 11 }
+                  }
+                  Text { visible: (modelData.transcript || "").length > 0
+                         text: "you: " + (modelData.transcript || "")
+                         color: fg; font.pixelSize: 12
+                         width: dCol.width; wrapMode: Text.WordWrap }
+                  Text { visible: (modelData.reply || modelData.result || "").length > 0
+                         text: "wisp: " + (modelData.reply || modelData.result || "")
+                         color: dim; font.pixelSize: 12
+                         width: dCol.width; wrapMode: Text.WordWrap }
+                  Row {
+                    spacing: 6
+                    Repeater {
+                      model: modelData.stages || []
+                      Rectangle {
+                        width: stTxt.width + 10; height: 16; radius: 3
+                        color: "#232946"
+                        Text { id: stTxt; anchors.centerIn: parent
+                               text: modelData[0] + " " + (modelData[1]||0) + "ms"
+                               color: dim; font.pixelSize: 10 }
                       }
                     }
                   }
-                  onTextChanged: lastLoaded = text
                 }
               }
             }
-          }
-          Text { text: "skills/ — self-authored SKILL.md files"
-                 color: faint; font.pixelSize: 11; topPadding: 6 }
-          Rectangle {
-            width: memCol.width - 32; height: skTxt.implicitHeight + 16
-            color: card; radius: 6
-            Text { id: skTxt; anchors.fill: parent; anchors.margins: 8
-                   text: win.skillsList || "(no skills yet — say \"Wisp, learn …\")"
-                   color: dim; font.pixelSize: 10
-                   font.family: "monospace"; wrapMode: Text.Wrap }
+
+            Text {
+              visible: win.corrections.length > 0
+              topPadding: 8
+              width: parent.width; wrapMode: Text.WordWrap
+              color: faint; font.pixelSize: 11
+              text: "Learned corrections — things you told it to do " +
+                    "differently:"
+            }
+            Repeater {
+              model: win.corrections
+              Text { text: "  • " + modelData
+                     color: dim; font.pixelSize: 11
+                     width: actCol.width; wrapMode: Text.WordWrap
+                     elide: Text.ElideRight; maximumLineCount: 1 }
+            }
           }
         }
       }
 
-      // TASKS
-      Flickable {
-        contentHeight: taskCol.implicitHeight; clip: true
+      // ════ MEMORY ════
+      Item {
+        Flickable {
+          anchors.fill: parent; anchors.margins: 16
+          contentHeight: memCol.height
+          clip: true
+          Column {
+            id: memCol
+            width: parent.width; spacing: 12
+
+            Text {
+              width: parent.width; wrapMode: Text.WordWrap
+              color: faint; font.pixelSize: 11
+              text: "Wisp reads these files at the start of every turn — " +
+                    "they're its long-term memory. MEMORY.md = facts it has " +
+                    "learned about you and your machine. USER.md = how you " +
+                    "want it to behave. Edit either and it applies next turn. " +
+                    "Semantic recall (searches old turns by meaning) is in " +
+                    "Settings → Memory."
+            }
+
+            Repeater {
+              model: [["memory", "MEMORY.md", memoryView],
+                      ["user",   "USER.md",   userView]]
+              Rectangle {
+                width: memCol.width; height: memEditCol.height + 16
+                color: card; radius: 8
+                property var src: modelData[2]
+                property string tgt: modelData[0]
+                Column {
+                  id: memEditCol
+                  anchors.fill: parent; anchors.margins: 8; spacing: 6
+                  Row {
+                    spacing: 10
+                    Text { text: modelData[1]; color: fg; font.pixelSize: 13
+                           font.bold: true }
+                    Rectangle {
+                      width: 44; height: 22; radius: 4; color: "#283457"
+                      Text { anchors.centerIn: parent; text: "save"
+                             color: fg; font.pixelSize: 11 }
+                      MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                          writeProc.command = ["wispd", "memory-write",
+                                               modelData[0],
+                                               Qt.btoa(edit.text)];
+                          writeProc.running = true;
+                        }
+                      }
+                    }
+                    Text { text: "whole-file edit — it keeps the header"
+                           color: faint; font.pixelSize: 10
+                           anchors.verticalCenter: parent.verticalCenter }
+                  }
+                  Rectangle {
+                    width: memEditCol.width; height: 140; radius: 4
+                    color: "#16161e"; border.color: border
+                    Flickable {
+                      anchors.fill: parent; anchors.margins: 4
+                      contentHeight: edit.height; clip: true
+                      TextEdit {
+                        id: edit
+                        width: parent.width
+                        color: dim; font.pixelSize: 11
+                        font.family: "monospace"
+                        wrapMode: TextEdit.Wrap
+                        text: modelData[2].text()
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // ════ AGENTS ════
+      Item {
         Column {
-          id: taskCol; width: parent.width; padding: 16; spacing: 6
-          Text { text: "spawn a background agent task — runs through \
-[brain] agent_runtime"; color: faint; font.pixelSize: 11 }
+          anchors.fill: parent; anchors.margins: 16; spacing: 12
+
+          Text {
+            width: parent.width; wrapMode: Text.WordWrap
+            color: faint; font.pixelSize: 11
+            text: "Background tasks Wisp runs for you (coding agents like " +
+                  "opencode/codex/claude — pick which in Settings → Brain). " +
+                  "They keep working while you do other things; cancel any " +
+                  "one below."
+          }
+
           Row {
             spacing: 8
             Rectangle {
-              width: taskCol.width - 140; height: 30
-              color: "#16161e"; radius: 6; border.color: border
+              width: parent.width - 140; height: 30; radius: 5
+              color: card; border.color: border
               TextInput {
                 id: taskInput
-                anchors.fill: parent; anchors.margins: 8
+                anchors.fill: parent; anchors.margins: 6
                 color: fg; font.pixelSize: 12; clip: true
-                property string placeholder: "describe the task…"
-                Text { visible: !taskInput.text; text: taskInput.placeholder
-                       color: faint; font.pixelSize: 12
-                       anchors.verticalCenter: parent.verticalCenter }
+                property string placeholder: "describe a task…"
+                Text { anchors.fill: parent; verticalAlignment: Text.AlignVCenter
+                       visible: !taskInput.text
+                       text: taskInput.placeholder
+                       color: faint; font.pixelSize: 12 }
               }
             }
             Rectangle {
-              width: 70; height: 30; radius: 6; color: "#283457"
+              width: 70; height: 30; radius: 5; color: "#283457"
               Text { anchors.centerIn: parent; text: "spawn"
                      color: fg; font.pixelSize: 12 }
               MouseArea {
                 anchors.fill: parent
                 onClicked: {
-                  if (taskInput.text.trim().length > 0) {
-                    win.wispd(["agent"].concat(
-                      taskInput.text.trim().split(" ")));
-                    taskInput.text = "";
-                  }
+                  if (taskInput.text.trim().length === 0) return;
+                  win.wispd(["agent", taskInput.text.trim()]);
+                  taskInput.text = "";
                 }
               }
             }
           }
-          Text { text: "agent tasks (from state.json)"; color: faint
-                 font.pixelSize: 11; topPadding: 6 }
-          Repeater {
-            model: Object.keys(win.stateObj.tasks || {})
-            Rectangle {
-              width: taskCol.width - 32; height: trow.implicitHeight + 14
-              color: card; radius: 6
-              Row {
-                id: trow; anchors.fill: parent; anchors.margins: 7
-                spacing: 8
-                Column {
-                  width: trow.width - 74; spacing: 2
-                  Text { text: modelData + "  [" +
-                         (win.stateObj.tasks[modelData].status || "?") + "]"
-                         color: fg; font.pixelSize: 12; font.bold: true }
-                  Text { text: win.stateObj.tasks[modelData].task || ""
-                         color: dim; font.pixelSize: 11
-                         width: parent.width; wrapMode: Text.Wrap }
-                }
-                Rectangle {
-                  width: 58; height: 22; radius: 5; color: "#3d2233"
-                  visible: (win.stateObj.tasks[modelData].status || "")
-                           === "running"
-                  anchors.verticalCenter: parent.verticalCenter
-                  Text { anchors.centerIn: parent; text: "cancel"
-                         color: "#f7768e"; font.pixelSize: 10 }
-                  MouseArea { anchors.fill: parent
-                              onClicked: win.wispd(["task_cancel",
-                                                   modelData]) }
-                }
-              }
-            }
-          }
-          Text { visible: Object.keys(win.stateObj.tasks || {}).length === 0
-                 text: "no agent tasks yet — spawn above or say \
-\"Wisp, agent …\""
-                 color: faint; font.pixelSize: 11 }
-        }
-      }
 
-      // SETTINGS
-      Flickable {
-        contentHeight: setCol.implicitHeight; clip: true
-        Column {
-          id: setCol; width: parent.width; padding: 16; spacing: 10
-          Text { text: "config.toml — edits apply live via IPC"
-                 color: faint; font.pixelSize: 11 }
-          Repeater {
-            model: [
-              ["agent.answer_model", "answer model"],
-              ["agent.model", "jev model"],
-              ["brain.router", "router (jev|chat|off)"],
-              ["brain.default", "answer brain (name:model)"],
-              ["brain.agent_runtime", "agent runtime (opencode|codex|claude|devin)"],
-              ["voice.enabled", "voice_out (true|false)"],
-              ["voice.cmd", "tts cmd override (empty=espeak)"],
-              ["stt.provider", "stt (local|openai)"],
-              ["stt.base_url", "stt base url (groq/openai/vllm)"],
-              ["stt.model", "stt model"],
-              ["stt.key_env", "stt api key env var"],
-              ["stt.prompt", "stt vocab priming (names/jargon)"],
-              ["recall.provider", "recall embeds (none|openai)"],
-              ["recall.model", "recall embed model"],
-              ["audio.seconds", "record seconds"],
-              ["agent.risk_threshold", "risk threshold"],
-              ["agent.allow_shell", "allow_shell (true|false)"],
-              ["agent.screenshots", "screenshots (true|false)"],
-              ["agents.model", "agent runtime model (ori opencode)"],
-            ]
-            Rectangle {
-              width: setCol.width - 32; height: 40
-              color: card; radius: 6
-              Row {
-                anchors.fill: parent; anchors.margins: 8; spacing: 10
-                Text { text: modelData[1]; color: dim; font.pixelSize: 12
-                       width: 190; anchors.verticalCenter: parent.verticalCenter }
+          Flickable {
+            width: parent.width; height: parent.height - y - 8
+            contentHeight: taskCol.height; clip: true
+            Column {
+              id: taskCol
+              width: parent.width; spacing: 8
+              Repeater {
+                model: Object.keys(win.tasks)
                 Rectangle {
-                  width: 300; height: 26; radius: 4; color: "#16161e"
-                  anchors.verticalCenter: parent.verticalCenter
-                  border.color: border
-                  TextInput {
-                    id: input
-                    anchors.fill: parent; anchors.margins: 5
-                    color: fg; font.pixelSize: 12; clip: true
-                    text: {
-                      var parts = modelData[0].split(".");
-                      var v = (win.cfgObj[parts[0]] || {})[parts[1]];
-                      v === undefined ? "" : String(v);
+                  width: taskCol.width; height: tRow.height + 16
+                  color: card; radius: 8
+                  property var t: win.tasks[modelData] || {}
+                  Row {
+                    id: tRow
+                    anchors.fill: parent; anchors.margins: 8; spacing: 10
+                    Rectangle {
+                      width: 8; height: 8; radius: 4
+                      anchors.verticalCenter: parent.verticalCenter
+                      color: parent.parent.t.status === "running" ? "#9ece6a"
+                           : parent.parent.t.status === "failed"  ? "#e05555"
+                           : "#565f89"
+                    }
+                    Column {
+                      width: tRow.width - 110
+                      Text { text: modelData
+                             color: fg; font.pixelSize: 12
+                             elide: Text.ElideRight; width: parent.width }
+                      Text { text: (parent.parent.t.status || "?") + " · "
+                                 + (parent.parent.t.task || "").slice(0, 80)
+                             color: faint; font.pixelSize: 10
+                             width: parent.width; elide: Text.ElideRight }
+                    }
+                    Rectangle {
+                      visible: parent.parent.t.status === "running"
+                      width: 60; height: 24; radius: 4; color: "#3a2030"
+                      anchors.verticalCenter: parent.verticalCenter
+                      Text { anchors.centerIn: parent; text: "cancel"
+                             color: fg; font.pixelSize: 10 }
+                      MouseArea {
+                        anchors.fill: parent
+                        onClicked: win.wispd(["task_cancel", modelData])
+                      }
                     }
                   }
                 }
-                Rectangle {
-                  width: 60; height: 26; radius: 4; color: "#283457"
-                  anchors.verticalCenter: parent.verticalCenter
-                  Text { anchors.centerIn: parent; text: "set"
-                         color: fg; font.pixelSize: 11 }
-                  MouseArea {
-                    anchors.fill: parent
-                    onClicked: win.wispd(["config", "set", modelData[0],
-                                         input.text])
+              }
+              Text {
+                visible: Object.keys(win.tasks).length === 0
+                text: "No tasks yet."
+                color: faint; font.pixelSize: 12
+              }
+            }
+          }
+        }
+      }
+
+      // ════ SETTINGS ════
+      Item {
+        Flickable {
+          anchors.fill: parent; anchors.margins: 16
+          contentHeight: setCol.height
+          clip: true
+          Column {
+            id: setCol
+            width: parent.width; spacing: 14
+
+            Text {
+              width: parent.width; wrapMode: Text.WordWrap
+              color: faint; font.pixelSize: 11
+              text: "config.toml, grouped. Edits apply live — no restart " +
+                    "needed. Everything has a default; blank means default."
+            }
+
+            Repeater {
+              model: [
+                ["Talking to it",
+                 "The hotkey and how long it records after you press.",
+                 [["hotkey.mod",          "modifier key",   "SUPER / ALT / CTRL"],
+                  ["hotkey.key",          "push-to-talk key", "D (with modifier = SUPER+D)"],
+                  ["audio.seconds",       "recording length", "seconds of mic per press"],
+                  ["voice.enabled",       "speak answers",  "true/false — spoken replies via TTS"],
+                  ["voice.cmd",           "TTS command",    "empty = espeak; set a nicer voice cmd"]]],
+                ["Hearing",
+                 "Speech-to-text: who transcribes you. 'local' = whisper.cpp " +
+                 "on this machine (free, private); 'openai'-compatible = Groq/any " +
+                 "API (faster, sends audio out).",
+                 [["stt.provider",        "STT provider",   "local | openai"],
+                  ["stt.base_url",        "STT endpoint",   "groq/openai/vllm URL"],
+                  ["stt.model",           "STT model",      "whisper-large-v3-turbo etc."],
+                  ["stt.key_env",         "API key env var","name of env var holding the key"],
+                  ["stt.prompt",          "vocab priming",  "names/jargon to recognize better"]]],
+                ["Brain",
+                 "Who thinks. Router picks what to do with your request " +
+                 "(jev = decision API, chat = straight to the answer model, " +
+                 "off = ask clarifying). The answer brain writes replies.",
+                 [["brain.router",        "router",         "jev | chat | off"],
+                  ["brain.default",       "answer brain",   "provider:model, e.g. ollama:llama3"],
+                  ["agent.model",         "jev model",      "typesafe/jev-1.13"],
+                  ["agent.answer_model",  "answer model",   "e.g. llama-4-maverick"],
+                  ["brain.agent_runtime", "agent runtime",  "opencode | codex | claude | devin"]]],
+                ["Agents & actions",
+                 "What Wisp is allowed to do on your desktop. Risk threshold " +
+                 "gates how dangerous an action can be before it needs you " +
+                 "to confirm.",
+                 [["agent.risk_threshold","risk threshold", "lower = asks you more often"],
+                  ["agent.allow_shell",   "allow shell",    "true/false — run shell commands"],
+                  ["agent.screenshots",   "screenshots",    "true/false — may see your screen"],
+                  ["agents.model",        "agent model",    "model for spawned runtimes"]]],
+                ["Memory & recall",
+                 "Semantic recall: embeds past turns so 'the thing with the " +
+                 "printer' finds old context. 'none' = off (FTS keyword " +
+                 "search only, zero keys needed).",
+                 [["recall.provider",     "recall embeds",  "none | openai"],
+                  ["recall.base_url",     "embed endpoint", "openrouter/openai URL"],
+                  ["recall.model",        "embed model",    "text-embedding-3-small"],
+                  ["agent.session_turns", "session memory", "turns of chat history kept"]]],
+                ["Debugging",
+                 "Full-fidelity trace of every turn (action, decision, tool " +
+                 "call, timings) for replay and fixing. Never logs keys.",
+                 [["debug.trace",         "dev trace",      "true/false — writes trace.jsonl"]]]
+              ]
+
+              Column {
+                width: setCol.width; spacing: 6
+                property string secTitle: modelData[0]
+                property string secBlurb: modelData[1]
+                property var secRows: modelData[2]
+
+                Text { text: parent.secTitle
+                       color: accent; font.pixelSize: 14; font.bold: true }
+                Text { text: parent.secBlurb
+                       color: faint; font.pixelSize: 11
+                       width: setCol.width; wrapMode: Text.WordWrap }
+
+                Repeater {
+                  model: parent.secRows
+                  Rectangle {
+                    width: setCol.width - 16; height: 44
+                    color: card; radius: 6
+                    Row {
+                      anchors.fill: parent; anchors.margins: 8; spacing: 10
+                      Column {
+                        width: 200
+                        anchors.verticalCenter: parent.verticalCenter
+                        Text { text: modelData[1]; color: dim; font.pixelSize: 12 }
+                        Text { text: modelData[2]; color: faint; font.pixelSize: 9 }
+                      }
+                      Rectangle {
+                        width: setCol.width - 330; height: 28; radius: 4
+                        color: "#16161e"; border.color: border
+                        anchors.verticalCenter: parent.verticalCenter
+                        TextInput {
+                          id: sinput
+                          anchors.fill: parent; anchors.margins: 5
+                          color: fg; font.pixelSize: 12; clip: true
+                          text: {
+                            var parts = modelData[0].split(".");
+                            var sec = win.cfgObj[parts[0]] || {};
+                            var v = sec[parts.slice(1).join(".")];
+                            if (v === undefined && parts.length > 2)
+                              v = (sec[parts[1]] || {})[parts[2]];
+                            v === undefined ? "" : String(v);
+                          }
+                        }
+                      }
+                      Rectangle {
+                        width: 50; height: 28; radius: 4; color: "#283457"
+                        anchors.verticalCenter: parent.verticalCenter
+                        Text { anchors.centerIn: parent; text: "set"
+                               color: fg; font.pixelSize: 11 }
+                        MouseArea {
+                          anchors.fill: parent
+                          onClicked: win.wispd(["config", "set",
+                                               modelData[0], sinput.text])
+                        }
+                      }
+                    }
                   }
                 }
               }
