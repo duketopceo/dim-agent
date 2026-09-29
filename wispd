@@ -169,6 +169,27 @@ def install_files() -> None:
         if f.exists():
             shutil.copy2(f, opt / f.name)
             print(f"installed {opt}/{f.name}")
+    shells_src = src / "shells"
+    if shells_src.is_dir():
+        shutil.copytree(shells_src, opt / "shells", dirs_exist_ok=True)
+        print(f"installed {opt}/shells")
+    desktop = (config.HOME / ".local" / "share" / "applications"
+               / "wisp.desktop")
+    desktop.parent.mkdir(parents=True, exist_ok=True)
+    desktop.write_text(f"""\
+[Desktop Entry]
+Type=Application
+Name=Wisp
+GenericName=Voice Assistant
+Comment=Wisp voice assistant — management console
+Exec=quickshell -n -p {opt}/shells/debug
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=voice;assistant;ai;wisp;
+StartupNotify=false
+""")
+    print(f"installed {desktop}")
     plugin_src = src / "shell-plugin"
     plugin_dst = (config.HOME / ".config" / "omarchy" / "plugins"
                   / "io.github.duketopceo.wisp")
