@@ -3,24 +3,24 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 
-// Dim — management app. Open/close from the launcher; the daemon stays
+// Wisp — management app. Open/close from the launcher; the daemon stays
 // resident. Tabs: Status (live state + controls), Logs (decisions with
 // per-stage timing bars + session/corrections tails), Settings (live
-// config editing via `dimd config`), Tasks (agent registry).
+// config editing via `wispd config`), Tasks (agent registry).
 // Everything reads files/IPC — zero coupling to daemon internals.
 
 FloatingWindow {
   id: win
-  title: "Dim"
+  title: "Wisp"
   minimumSize: Qt.size(820, 620)
   color: "#16161e"
 
   readonly property string rtDir: {
     var rd = Quickshell.env("XDG_RUNTIME_DIR");
     if (!rd || rd.length === 0) rd = "/tmp";
-    return rd + "/dim-agent";
+    return rd + "/wisp";
   }
-  readonly property string dataDir: Quickshell.env("HOME") + "/.local/share/dim-agent"
+  readonly property string dataDir: Quickshell.env("HOME") + "/.local/share/wisp"
 
   property var stateObj: ({})
   property var decisions: []
@@ -29,27 +29,27 @@ FloatingWindow {
   property var cfgObj: ({})
   property int tab: 0
 
-  function dimd(args) {
+  function wispd(args) {
     if (cmdProc.running) return;
-    cmdProc.command = ["dimd"].concat(args);
+    cmdProc.command = ["wispd"].concat(args);
     cmdProc.running = true;
   }
 
   function svc(args) {
     if (svcProc.running) return;
-    svcProc.command = ["systemctl", "--user"].concat(args).concat(["dimd"]);
+    svcProc.command = ["systemctl", "--user"].concat(args).concat(["wispd"]);
     svcProc.running = true;
   }
 
-  Process { id: cmdProc; command: ["dimd", "status"]
+  Process { id: cmdProc; command: ["wispd", "status"]
             onExited: if (command[1] === "config" && command[2] === "set"
                           && !cfgProc.running) cfgProc.running = true; }
-  Process { id: svcProc; command: ["systemctl", "--user", "status", "dimd"] }
+  Process { id: svcProc; command: ["systemctl", "--user", "status", "wispd"] }
 
-  // config fetch: dimd config prints JSON when daemon up; parse stdout
+  // config fetch: wispd config prints JSON when daemon up; parse stdout
   Process {
     id: cfgProc
-    command: ["dimd", "config"]
+    command: ["wispd", "config"]
     stdout: StdioCollector {
       onStreamFinished: {
         try { win.cfgObj = JSON.parse(this.text); } catch (e) {}
@@ -127,7 +127,7 @@ FloatingWindow {
   property string skillsList: ""
   Process {
     id: skillsProc
-    command: ["sh", "-c", "for d in \"$HOME/.local/share/dim-agent/skills\"/*/; do [ -f \"$d/SKILL.md\" ] && echo \"== $d\" && cat \"$d/SKILL.md\"; done"]
+    command: ["sh", "-c", "for d in \"$HOME/.local/share/wisp/skills\"/*/; do [ -f \"$d/SKILL.md\" ] && echo \"== $d\" && cat \"$d/SKILL.md\"; done"]
     stdout: StdioCollector {
       onStreamFinished: win.skillsList = this.text
     }
@@ -217,7 +217,7 @@ FloatingWindow {
                 Text { id: bl; anchors.centerIn: parent; text: modelData
                        color: fg; font.pixelSize: 12 }
                 MouseArea { anchors.fill: parent
-                            onClicked: win.dimd([modelData]) }
+                            onClicked: win.wispd([modelData]) }
               }
             }
           }
@@ -488,7 +488,7 @@ FloatingWindow {
         contentHeight: memCol.implicitHeight; clip: true
         Column {
           id: memCol; width: parent.width; padding: 16; spacing: 8
-          // Editable MEMORY/USER — saves go through `dimd memory-write`
+          // Editable MEMORY/USER — saves go through `wispd memory-write`
           // → IPC `memory` cmd → memory.edit("write") — the same
           // budgeted, headered path the tools use, not a raw write.
           Repeater {
@@ -509,7 +509,7 @@ FloatingWindow {
                          color: fg; font.pixelSize: 10 }
                   MouseArea {
                     anchors.fill: parent
-                    onClicked: win.dimd(["memory-write", memCard.tgt,
+                    onClicked: win.wispd(["memory-write", memCard.tgt,
                                          Qt.btoa(ed.text)])
                   }
                 }
@@ -547,7 +547,7 @@ FloatingWindow {
             width: memCol.width - 32; height: skTxt.implicitHeight + 16
             color: card; radius: 6
             Text { id: skTxt; anchors.fill: parent; anchors.margins: 8
-                   text: win.skillsList || "(no skills yet — say \"Dim, learn …\")"
+                   text: win.skillsList || "(no skills yet — say \"Wisp, learn …\")"
                    color: dim; font.pixelSize: 10
                    font.family: "monospace"; wrapMode: Text.Wrap }
           }
@@ -584,7 +584,7 @@ FloatingWindow {
                 anchors.fill: parent
                 onClicked: {
                   if (taskInput.text.trim().length > 0) {
-                    win.dimd(["agent"].concat(
+                    win.wispd(["agent"].concat(
                       taskInput.text.trim().split(" ")));
                     taskInput.text = "";
                   }
@@ -619,7 +619,7 @@ FloatingWindow {
                   Text { anchors.centerIn: parent; text: "cancel"
                          color: "#f7768e"; font.pixelSize: 10 }
                   MouseArea { anchors.fill: parent
-                              onClicked: win.dimd(["task_cancel",
+                              onClicked: win.wispd(["task_cancel",
                                                    modelData]) }
                 }
               }
@@ -627,7 +627,7 @@ FloatingWindow {
           }
           Text { visible: Object.keys(win.stateObj.tasks || {}).length === 0
                  text: "no agent tasks yet — spawn above or say \
-\"Dim, agent …\""
+\"Wisp, agent …\""
                  color: faint; font.pixelSize: 11 }
         }
       }
@@ -690,7 +690,7 @@ FloatingWindow {
                          color: fg; font.pixelSize: 11 }
                   MouseArea {
                     anchors.fill: parent
-                    onClicked: win.dimd(["config", "set", modelData[0],
+                    onClicked: win.wispd(["config", "set", modelData[0],
                                          input.text])
                   }
                 }

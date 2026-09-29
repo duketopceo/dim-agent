@@ -5,24 +5,24 @@ Written 2026-09-19 during migration off the M1 MacBook. Branch: `feat/dim-assist
 ## Where things stand
 
 The 8-unit plan (`docs/plans/2026-09-18-001-feat-dim-autonomous-assistant-plan.md`)
-is fully implemented: resident `dimd` daemon + Unix-socket IPC, Jev routing
+is fully implemented: resident `wispd` daemon + Unix-socket IPC, Jev routing
 v2 (launch/tool/agent/answer/clarify), risk-tiered toolbelt, `ori opencode`
 named agents, Omarchy Quickshell plugin (bar icon + dim overlay + choices),
 weekly human-gated learning loop, generic install. 54/54 tests pass.
 
 ## Live state on the M1 (must be redone on omarchy-max)
 
-- `dimd install` + `systemctl --user enable --now dimd`
+- `wispd install` + `systemctl --user enable --now wispd`
 - `Super+D` bind lives in `~/.config/hypr/bindings.lua` **and** the
   machine stash `~/.local/share/machine/<host>/bindings.lua` (sync-watch
   reverts ~/.config edits not in the stash)
-- Plugin enabled via `omarchy shell setPluginEnabled io.github.duketopceo.dim`
+- Plugin enabled via `omarchy shell setPluginEnabled io.github.duketopceo.wisp`
   and already placed in the bar `center` layout in `~/.config/omarchy/shell.json`
 - `whisper.cpp` at `~/src/whisper.cpp`; model `ggml-small.en.bin` must be
   downloaded (`bash models/download-ggml-model.sh small.en`) — the
   `for-tests-*.bin` files are stubs, not real models
-- Secrets: `OPENROUTER_API_KEY` in `~/.config/dim-agent/.env`
-- `harness.json` regenerates via `dimd harness` (mines dayflow if present,
+- Secrets: `OPENROUTER_API_KEY` in `~/.config/wisp/.env`
+- `harness.json` regenerates via `wispd harness` (mines dayflow if present,
   else generic .desktop/PATH catalog)
 
 ## Known issues / next tasks
@@ -60,7 +60,7 @@ weekly human-gated learning loop, generic install. 54/54 tests pass.
 - Shell plugin overlay is now `Companion.qml` — persistent bottom-right
   orb (idle/listening/thinking/acting/error colors, breathes while
   listening), click expands a card with transcript/answer/choices.
-  `DimOverlay.qml` kept in repo but no longer the entry point.
+  `WispOverlay.qml` kept in repo but no longer the entry point.
 - 83/83 tests pass; daemon + plugin synced and live on omarchy-max
   (summon returned ok, no QML errors).
 

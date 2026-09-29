@@ -1,17 +1,17 @@
 # macOS adapter (U7)
 
-`dimd-rs` runs on macOS with the same Unix-socket contract — same
+`wispd-rs` runs on macOS with the same Unix-socket contract — same
 commands, same `state.json`/trace/decisions formats, same TOML config.
 Only the platform layer swaps: every OS shell-out routes through
-`dim/platform.py` / `rs/dimd/src/platform.rs`, detected at runtime
-(`DIMD_OS` env override mirrors it for tests).
+`dim/platform.py` / `rs/wispd/src/platform.rs`, detected at runtime
+(`WISP_OS` env override mirrors it for tests).
 
 ## Paths
 
 | What | macOS |
 |---|---|
-| config + data | `~/Library/Application Support/dim-agent/` |
-| socket + state | `$TMPDIR/dim-agent/` (`dimd.sock`, `state.json`) |
+| config + data | `~/Library/Application Support/wisp/` |
+| socket + state | `$TMPDIR/wisp/` (`wispd.sock`, `state.json`) |
 
 ## Command map
 
@@ -47,8 +47,8 @@ tells the user exactly what's needed.
 
 ## Push-to-talk hotkey
 
-`dimd install` only writes Hyprland binds on Linux. On macOS bind
-`dimd listen` (or the trigger script) via SKHD, Raycast, Hammerspoon,
+`wispd install` only writes Hyprland binds on Linux. On macOS bind
+`wispd listen` (or the trigger script) via SKHD, Raycast, Hammerspoon,
 or a Shortcuts/Automator global shortcut. Native `global-hotkey`
 integration is a U10 packaging concern.
 
@@ -57,7 +57,7 @@ integration is a U10 packaging concern.
 **Thin native menu-bar item + panel** beats a Tauri v2 webview orb for
 U7 scope: the existing socket contract already serves a QML shell on
 Linux, and the smallest macOS surface is an `NSStatusItem`/`tray-icon`
-that reads the same socket and shells out `dimd listen`. A full Tauri
+that reads the same socket and shells out `wispd listen`. A full Tauri
 shell duplicates the GUI tab work for ~zero user value pre-release;
 revisit if the orb needs to be a floating always-on-top panel (then
 Tauri is the pragmatic pick).
