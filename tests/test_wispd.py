@@ -13,6 +13,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from wisp import config, pipeline  # noqa: E402
 
 
+def _with_os(os_name):
+    """Pin the platform seam so adapter assertions are host-independent."""
+    return mock.patch.dict(os.environ, {"WISP_OS": os_name})
+
+
 class TestLoadConfig(unittest.TestCase):
     def test_parses_toml_subset(self):
         with tempfile.TemporaryDirectory() as td:
@@ -128,7 +133,8 @@ class TestExecute(unittest.TestCase):
 
     def test_launch_uses_lua_dispatcher(self):
         ok = mock.Mock(returncode=0, stdout="ok")
-        with mock.patch.object(pipeline.shutil, "which",
+        with _with_os("linux"), \
+             mock.patch.object(pipeline.shutil, "which",
                                return_value="/usr/bin/ghostty"), \
              mock.patch.object(pipeline.subprocess, "run",
                                return_value=ok) as run:
@@ -140,7 +146,8 @@ class TestExecute(unittest.TestCase):
 
     def test_launch_falls_back_to_dispatch(self):
         fail = mock.Mock(returncode=1, stdout="err")
-        with mock.patch.object(pipeline.shutil, "which",
+        with _with_os("linux"), \
+             mock.patch.object(pipeline.shutil, "which",
                                return_value="/usr/bin/ghostty"), \
              mock.patch.object(pipeline.subprocess, "run",
                                return_value=fail) as run:

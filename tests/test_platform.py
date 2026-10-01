@@ -161,8 +161,7 @@ class TestPlatform(unittest.TestCase):
                     platform.screenshot_cmd(Path("/t/s.png"))[0], shot)
                 self.assertEqual(
                     platform.type_text_cmd("hi")[0], typer)
-            self.assertEqual(
-                platform.current() == "linux", True)
+                self.assertEqual(platform.current(), "linux")
 
     def test_desktop_fallback_order(self):
         """Hyprland missing grim → falls through to next screenshotter."""
