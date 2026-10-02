@@ -925,7 +925,10 @@ mod tests {
         assert!(workspace_cmds_for(Os::MacOS, Desktop::Hyprland, 10).is_empty()); // 1..=9
         let w = workspace_cmds_for(Os::MacOS, Desktop::Hyprland, 3);
         assert_eq!(w[0].get_program(), "osascript");
-        assert!(focus_cmds_for(Os::Windows, Desktop::Hyprland, "x").is_empty());
+        // Windows never gets hyprctl/wm tools; powershell may or may not
+        // exist on the host, so assert intent not emptiness.
+        assert!(focus_cmds_for(Os::Windows, Desktop::Hyprland, "x")
+            .iter().all(|c| c.get_program() != "hyprctl"));
     }
 
     #[test]
