@@ -376,7 +376,7 @@ StartupNotify=false
         print(f"installed {plugin_dst}")
     trigger = config.HOME / ".local" / "bin" / "wisp-trigger"
     trigger.parent.mkdir(parents=True, exist_ok=True)
-    trigger.write_text(f'#!/bin/sh\nexec python3 {opt}/wispd trigger "$@"\n')
+    trigger.write_text(f'#!/bin/sh\nexec {sys.executable} {opt}/wispd trigger "$@"\n')
     trigger.chmod(0o755)
     print(f"installed {trigger}")
     from wisp import platform as _plat
