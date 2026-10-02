@@ -60,6 +60,8 @@ Panel {
 
   readonly property string dataDir: Quickshell.env("HOME")
     + "/.local/share/wisp"
+  readonly property string wispdBin: Quickshell.env("HOME")
+    + "/.local/bin/wispd"
   property int tab: 0
   readonly property var tabNames: ["Now", "Agents", "Activity", "Tele", "Skills", "Context", "Connect"]
 
@@ -103,14 +105,14 @@ Panel {
 
   Process {
     id: ctxProc
-    command: [Quickshell.env("HOME") + "/.local/bin/wispd", "context"]
+    command: [wisp.wispdBin, "context"]
     stdout: StdioCollector {}
     onExited: wisp.contextText = stdout.text || ""
   }
 
   Process {
     id: connListProc
-    command: [Quickshell.env("HOME") + "/.local/bin/wispd",
+    command: [wisp.wispdBin,
               "connect", "--list", "--json"]
     stdout: StdioCollector {}
     onExited: {
@@ -121,7 +123,7 @@ Panel {
 
   Process {
     id: connRunProc
-    command: [Quickshell.env("HOME") + "/.local/bin/wispd", "connect", ""]
+    command: [wisp.wispdBin, "connect", ""]
     onExited: {
       wisp.connectBusy = false
       connListProc.running = false
@@ -132,8 +134,7 @@ Panel {
   function runConnect(alias) {
     if (wisp.connectBusy) return
     wisp.connectBusy = true
-    connRunProc.command = [Quickshell.env("HOME")
-      + "/.local/bin/wispd", "connect", alias]
+    connRunProc.command = [wisp.wispdBin, "connect", alias]
     connRunProc.running = true
   }
 
@@ -207,18 +208,17 @@ Panel {
 
   Process {
     id: labelProc
-    command: [Quickshell.env("HOME") + "/.local/bin/wispd", "label", ""]
+    command: [wisp.wispdBin, "label", ""]
   }
 
   function sendLabel(which) {
-    labelProc.command = [Quickshell.env("HOME")
-      + "/.local/bin/wispd", "label", which]
+    labelProc.command = [wisp.wispdBin, "label", which]
     labelProc.running = true
   }
 
   Process {
     id: interruptProc
-    command: [Quickshell.env("HOME") + "/.local/bin/wispd", "interrupt"]
+    command: [wisp.wispdBin, "interrupt"]
   }
 
   function sendInterrupt() {
@@ -699,8 +699,7 @@ Panel {
         width: parent.width - parent.padding * 2
         spacing: Style.space(6)
         onVisibleChanged: {
-          if (visible) { ctxProc.running = false
-                         ctxProc.running = true }
+          if (visible && !ctxProc.running) ctxProc.running = true
         }
         Text {
           text: "what wisp sees"
@@ -759,8 +758,7 @@ Panel {
         width: parent.width - parent.padding * 2
         spacing: 4
         onVisibleChanged: {
-          if (visible) { connListProc.running = false
-                         connListProc.running = true }
+          if (visible && !connListProc.running) connListProc.running = true
         }
         Text {
           text: "connectors (" + wisp.connectors.length + ")"
