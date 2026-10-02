@@ -17,7 +17,7 @@ Only the platform layer swaps: every OS shell-out routes through
 
 | Capability | Linux | macOS |
 |---|---|---|
-| mic record | `pw-record` → `arecord` | `afrecord` (built-in) → brew `sox` |
+| mic record | `pw-record` → `arecord` | brew `sox` (`afrecord` is **not** present on macOS 27 — the code probes for it and falls through) |
 | mic level meter | `arecord` U8 stream | brew `sox` (absent → level stays 0) |
 | screenshot | `grim` | `screencapture -x` |
 | type text | `wtype` | `osascript` System Events keystroke |
@@ -42,8 +42,10 @@ tells the user exactly what's needed.
 - **Accessibility** — `osascript` System Events keystrokes (dictation,
   `type_text`, Cmd-W close, workspace switch) silently no-op without
   it. Grant for the terminal/launcher app.
-- **Microphone** — `afrecord` fails fast when ungranted → the turn
-  ends with a "no recorder" error line, logged to the trace.
+- **Microphone** — with no recorder available the turn ends with a "no
+  recorder" error line, logged to the trace. Install `sox` (`brew
+  install sox`); macOS ships no `afrecord`. An ungranted Microphone
+  permission fails the same way, so check both before debugging deeper.
 
 ## Push-to-talk hotkey
 
