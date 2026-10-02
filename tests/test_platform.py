@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from wisp import config, platform
+from wisp.tools import desktop
 
 
 def _with_os(os_name):
@@ -271,6 +272,26 @@ class TestDefaultApps(unittest.TestCase):
                 cfg = config.load_config()
             self.assertEqual(cfg["apps"]["settings"],
                              "open -a 'System Settings'")
+
+
+class TestClientsOffLinux(unittest.TestCase):
+    """clients() is Hyprland-only. It used to shell hyprctl unguarded, so
+    on macOS it raised FileNotFoundError instead of reporting no windows."""
+
+    def test_empty_on_macos(self):
+        with _with_os("macos"):
+            self.assertEqual(desktop.clients(), [])
+
+    def test_empty_on_windows(self):
+        with _with_os("windows"):
+            self.assertEqual(desktop.clients(), [])
+
+    def test_hyprctl_still_called_on_linux(self):
+        with _with_os("linux"), \
+             mock.patch.object(desktop.subprocess, "run") as run:
+            run.return_value = mock.Mock(stdout="[{\"class\": \"a\"}]")
+            self.assertEqual(desktop.clients(), [{"class": "a"}])
+        self.assertEqual(run.call_args[0][0][0], "hyprctl")
 
 
 if __name__ == "__main__":

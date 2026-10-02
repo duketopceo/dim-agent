@@ -85,6 +85,12 @@ def workspace(n: str) -> str:
 
 
 def clients() -> list:
+    """Open windows, as Hyprland reports them. Hyprland-only: no other
+    platform has an equivalent enumerator here, so return [] instead of
+    raising FileNotFoundError on a host without hyprctl."""
+    from .. import platform
+    if platform.current() != "linux":
+        return []
     r = subprocess.run(["hyprctl", "clients", "-j"],
                        capture_output=True, text=True, env=hypr_env())
     try:
