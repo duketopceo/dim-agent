@@ -77,8 +77,11 @@ class StdioTransport(unittest.TestCase):
             "\n".join(json.dumps(r) for r in responses) + "\n")
         proc = mock.Mock()
         proc.stdout = lines
+        proc.stdout.fileno = mock.Mock(return_value=0)
         proc.stdin = mock.Mock()
-        with mock.patch("subprocess.Popen", return_value=proc):
+        with mock.patch("subprocess.Popen", return_value=proc), \
+             mock.patch("wisp.tools.mcpclient.select.select",
+                        return_value=([0], [], [])):
             out = mcpclient._call_stdio("fakeserver", {}, "t", {})
         self.assertEqual(out, "done")
         sent = [c.args[0] for c in proc.stdin.write.call_args_list]
@@ -86,6 +89,19 @@ class StdioTransport(unittest.TestCase):
         self.assertEqual(methods, ["initialize",
                                    "notifications/initialized",
                                    "tools/call"])
+
+    def test_silent_server_times_out(self):
+        # the blocking-readline bug: a server that never writes must
+        # not stall past the deadline — select guards the read
+        proc = mock.Mock()
+        proc.stdout = io.StringIO("")
+        proc.stdout.fileno = mock.Mock(return_value=0)
+        proc.stdin = mock.Mock()
+        with mock.patch("subprocess.Popen", return_value=proc), \
+             mock.patch("wisp.tools.mcpclient.select.select",
+                        return_value=([], [], [])):
+            with self.assertRaisesRegex(RuntimeError, "reply timeout"):
+                mcpclient._call_stdio("fakeserver", {}, "t", {})
 
 
 class EndToEnd(unittest.TestCase):

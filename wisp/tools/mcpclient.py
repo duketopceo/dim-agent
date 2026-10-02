@@ -17,10 +17,10 @@ Disabled entirely with [mcp] enabled = "false".
 """
 import json
 import os
+import select
 import subprocess
+import time
 import urllib.request
-
-from .. import config
 
 TIMEOUT = 20
 _MAX_OUT = 4000
@@ -86,8 +86,15 @@ def _call_stdio(command: str, spec: dict, tool: str,
             proc.stdin.flush()
 
         def read_reply(rid, deadline):
-            import time as _t
-            while _t.time() < deadline:
+            fd = proc.stdout.fileno()
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise RuntimeError("reply timeout")
+                # select guards the actual read — a server that emits
+                # nothing can't stall us past the deadline
+                if not select.select([fd], [], [], remaining)[0]:
+                    raise RuntimeError("reply timeout")
                 line = proc.stdout.readline()
                 if not line:
                     raise RuntimeError("server closed pipe")
@@ -97,10 +104,8 @@ def _call_stdio(command: str, spec: dict, tool: str,
                     continue
                 if m.get("id") == rid:
                     return m
-            raise RuntimeError("reply timeout")
 
-        import time as _t
-        deadline = _t.time() + TIMEOUT
+        deadline = time.time() + TIMEOUT
         send(_rpc("initialize",
                   {"protocolVersion": _PROTO, "capabilities": {},
                    "clientInfo": _CLIENT}, rid=1))
@@ -111,7 +116,10 @@ def _call_stdio(command: str, spec: dict, tool: str,
         return _extract(read_reply(2, deadline))
     finally:
         proc.kill()
-        proc.wait(timeout=3)
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def _extract(resp: dict) -> str:
