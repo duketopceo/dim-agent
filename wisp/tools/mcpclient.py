@@ -168,15 +168,18 @@ def call(arg: str, cfg: dict) -> str:
         # *_params string fields.
         cat, _, action_name = tool.partition("/")
         action_name = action_name or cat
-        from .. import inventory
-        burl = ((inventory.load().get("mcp") or {})
-                .get("browseros") or {}).get("url")
+        try:
+            from .. import inventory
+            burl = ((inventory.load().get("mcp") or {})
+                    .get("browseros") or {}).get("url")
+        except Exception:
+            burl = None
         if not burl:
             return "SKIP (browseros MCP not found for strata route)"
         payload = {"server_name": spec.get("service", server),
                    "category_name": cat,
                    "action_name": action_name,
-                   "body_schema": json.dumps(args.get("body", args)),
+                   "body_schema": json.dumps(args.get("body") or args),
                    "query_params": json.dumps(args.get("query", {})),
                    "path_params": json.dumps(args.get("path", {}))}
         try:

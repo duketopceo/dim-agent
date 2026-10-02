@@ -78,14 +78,19 @@ def status(name: str, cfg: dict) -> dict:
         return {"connected": False, "auth_url": None,
                 "raw": "browseros MCP not in inventory"}
     from .tools import mcpclient
-    out = mcpclient._call_http(url, "connector_mcp_servers",
-                               {"server_name": canon[0]})
+    try:
+        out = mcpclient._call_http(url, "connector_mcp_servers",
+                                   {"server_name": canon[0]})
+    except Exception as e:
+        return {"connected": False, "auth_url": None,
+                "raw": f"gateway unreachable: {type(e).__name__}: {e}"}
     # gateway replies with a JSON record: {"connected": bool,
     # "authUrl": "...", "proxy": {...}}
     try:
         rec = json.loads(out[out.index("{"):])
-        return {"connected": bool(rec.get("connected")),
-                "auth_url": rec.get("authUrl"), "raw": out}
+        if isinstance(rec, dict):
+            return {"connected": bool(rec.get("connected")),
+                    "auth_url": rec.get("authUrl"), "raw": out}
     except (ValueError, KeyError):
         pass
     import re as _re
