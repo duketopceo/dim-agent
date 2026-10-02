@@ -38,8 +38,10 @@ def _db(path=None) -> sqlite3.Connection:
         import sqlite_vec
         db.enable_load_extension(True)
         sqlite_vec.load(db)
-    except (ImportError, sqlite3.Error):
+    except (ImportError, sqlite3.Error, AttributeError):
         pass  # FTS5-only fallback — vector ops degrade to no-ops
+        # (AttributeError: GitHub/CI python builds without sqlite
+        #  extension loading lack enable_load_extension entirely)
     db.executescript(_SCHEMA)
     return db
 
