@@ -33,13 +33,26 @@ class TestLoadConfig(unittest.TestCase):
     def test_writes_default_when_missing(self):
         with tempfile.TemporaryDirectory() as td:
             cfg_file = pathlib.Path(td) / "config.toml"
-            with mock.patch.object(config, "CFG_FILE", cfg_file), \
+            # [apps] defaults are host-specific — pin the seam so the
+            # assertion means the same thing on every dev machine.
+            with _with_os("linux"), \
+                 mock.patch.object(config, "CFG_FILE", cfg_file), \
                  mock.patch.object(config, "CFG_DIR", pathlib.Path(td)):
                 cfg = config.load_config()
             self.assertTrue(cfg_file.exists())
             self.assertEqual(cfg["apps"]["terminal"], "ghostty")
             self.assertEqual(cfg["audio"]["whisper_model"],
                              "ggml-small.en.bin")
+
+    def test_default_config_written_for_host(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_file = pathlib.Path(td) / "config.toml"
+            with _with_os("macos"), \
+                 mock.patch.object(config, "CFG_FILE", cfg_file), \
+                 mock.patch.object(config, "CFG_DIR", pathlib.Path(td)):
+                cfg = config.load_config()
+            self.assertEqual(cfg["apps"]["terminal"], "Terminal")
+            self.assertIn('[apps]', cfg_file.read_text())
 
 
 class TestExecute(unittest.TestCase):

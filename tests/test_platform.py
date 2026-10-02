@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from wisp import platform
+from wisp import config, platform
 
 
 def _with_os(os_name):
@@ -217,6 +217,35 @@ class TestPlatform(unittest.TestCase):
                 script = cmd[-1]
                 self.assertIn('\\"hi\\"', script)
                 self.assertIn('\\\\', script)
+
+
+class TestDefaultApps(unittest.TestCase):
+    """The default [apps] map must match the host. These are the names
+    Jev resolves "open the terminal" against, so a Linux name on macOS
+    turns every such request into a SKIP."""
+
+    def test_macos_defaults(self):
+        with _with_os("macos"):
+            apps = config._default_apps()
+        self.assertEqual(apps["terminal"], "Terminal")
+        self.assertEqual(apps["files"], "Finder")
+        self.assertEqual(apps["settings"], "System Settings")
+        self.assertNotIn("gnome", " ".join(apps.values()))
+        self.assertNotIn("nautilus", " ".join(apps.values()))
+
+    def test_linux_defaults_unchanged(self):
+        with _with_os("linux"):
+            apps = config._default_apps()
+        self.assertEqual(apps["terminal"], "ghostty")
+        self.assertEqual(apps["files"], "nautilus")
+
+    def test_toml_renders_apps_section(self):
+        with _with_os("macos"):
+            txt = config._apps_toml()
+        self.assertTrue(txt.startswith("[apps]\n"))
+        self.assertIn('terminal = "Terminal"', txt)
+        # the rest of the default config no longer carries a stale block
+        self.assertNotIn("[apps]", config.DEFAULT_CONFIG)
 
 
 if __name__ == "__main__":
