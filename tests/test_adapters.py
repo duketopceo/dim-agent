@@ -36,11 +36,11 @@ class MacCatalogTest(unittest.TestCase):
                 cat = adapters.generic_catalog()
 
         self.assertIn("Safari", cat)
-        self.assertEqual(cat["Safari"]["launch"], 'open -a "Safari"')
+        self.assertEqual(cat["Safari"]["launch"], "open -a 'Safari'")
         self.assertIn("cues", cat["Safari"])
         # multi-word bundle names survive intact
         self.assertEqual(cat["Google Chrome"]["launch"],
-                         'open -a "Google Chrome"')
+                         "open -a 'Google Chrome'")
         # nested Utilities dir is scanned
         self.assertIn("Terminal", cat)
         # dot-bundles skipped
@@ -74,7 +74,7 @@ class MacCatalogTest(unittest.TestCase):
                  mock.patch.object(adapters, "_MAC_EXTRA_APPS",
                                    {"Finder": real}):
                 cat = adapters.generic_catalog()
-        self.assertEqual(cat["Finder"]["launch"], 'open -a "Finder"')
+        self.assertEqual(cat["Finder"]["launch"], "open -a 'Finder'")
 
     def test_extra_apps_skipped_when_absent(self):
         missing = pathlib.Path("/nope/NotThere.app")

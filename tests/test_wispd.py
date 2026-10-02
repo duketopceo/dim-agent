@@ -51,7 +51,7 @@ class TestLoadConfig(unittest.TestCase):
                  mock.patch.object(config, "CFG_FILE", cfg_file), \
                  mock.patch.object(config, "CFG_DIR", pathlib.Path(td)):
                 cfg = config.load_config()
-            self.assertEqual(cfg["apps"]["terminal"], "Terminal")
+            self.assertEqual(cfg["apps"]["terminal"], "open -a 'Terminal'")
             self.assertIn('[apps]', cfg_file.read_text())
 
 

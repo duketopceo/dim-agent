@@ -74,11 +74,11 @@ def _mac_catalog() -> dict:
             name = f.stem
             if name.startswith(".") or name in apps:
                 continue
-            apps[name] = {"launch": f'open -a "{name}"',
+            apps[name] = {"launch": f"open -a '{name}'",
                           "cues": f"the {name} application"}
     for name, path in _MAC_EXTRA_APPS.items():
         if path.exists() and name not in apps:
-            apps[name] = {"launch": f'open -a "{name}"',
+            apps[name] = {"launch": f"open -a '{name}'",
                           "cues": f"the {name} application"}
     return apps
 

@@ -192,13 +192,24 @@ _DEFAULT_APPS = {
         "settings": "gnome-control-center", "browser_new_tab": "chromium",
     },
     "macos": {
-        "browser": "Safari", "terminal": "Terminal", "files": "Finder",
-        "vscode": "Cursor", "music": "Spotify",
-        "settings": "System Settings", "browser_new_tab": "Safari",
+        # macOS values are launch *commands*, not bare names: desktop
+        # .launch() probes which(value.split()[0]), and `Terminal` is not
+        # on PATH while `open` is. The app name is single-quoted because
+        # load_config() strips surrounding double quotes from TOML values
+        # and would eat an inner closing quote.
+        "browser": "open -a 'Safari'",
+        "terminal": "open -a 'Terminal'",
+        "files": "open -a 'Finder'",
+        "vscode": "open -a 'Cursor'",
+        "music": "open -a 'Spotify'",
+        "settings": "open -a 'System Settings'",
+        "browser_new_tab": "open -a 'Safari'",
     },
     "windows": {
+        # cmdline for platform.launch_exec_cmds, which wraps these in
+        # `cmd /c start "" /b <cmdline>`.
         "browser": "msedge", "terminal": "wt", "files": "explorer",
-        "vscode": "code", "music": "Spotify",
+        "vscode": "code", "music": "spotify",
         "settings": "ms-settings:", "browser_new_tab": "msedge",
     },
 }
