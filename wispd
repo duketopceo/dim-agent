@@ -58,8 +58,19 @@ def _handler(st: state_mod.State, cfg: dict, ctl: dict) -> callable:
         if c == "status":
             from wisp import agents
             agents.reap(cfg)  # zombie + timeout watchdog on each poll
-            st.tasks = agents.tasks()
+            cur = agents.tasks()
+            # long-running agent completion: notify once on the
+            # running → done transition
+            done = agents.finished(getattr(st, "_prev_tasks", {}), cur)
+            st._prev_tasks = cur
+            st.tasks = cur
             st.transition(st.status)
+            for t in done:
+                tail = (t.get("tail") or "")[:80]
+                from wisp.tools import system as _sys
+                _sys.notify_tool(
+                    f"wisp agent '{t['name']}' {t['status']}"
+                    + (f" — {tail}" if tail else ""))
             return {"ok": True, "state": st.snapshot()}
         if c == "listen":
             phase = cmd.get("phase", "")  # hold-to-talk: start|stop; empty = toggle
@@ -388,13 +399,18 @@ Name=Wisp
 GenericName=Voice Assistant
 Comment=Wisp voice assistant — management console
 Exec=quickshell -n -p {opt}/shells/debug
-Icon=audio-input-microphone
+Icon=wisp
 Terminal=false
 Categories=Utility;Accessibility;
 Keywords=voice;assistant;ai;wisp;
 StartupNotify=false
 """)
     print(f"installed {desktop}")
+    icons_src = src / "assets" / "icons" / "hicolor"
+    if icons_src.is_dir():
+        icons_dst = config.HOME / ".local" / "share" / "icons" / "hicolor"
+        shutil.copytree(icons_src, icons_dst, dirs_exist_ok=True)
+        print(f"installed {icons_dst}")
     plugin_src = src / "shell-plugin"
     plugin_dst = (config.HOME / ".config" / "omarchy" / "plugins"
                   / "io.github.duketopceo.wisp")
@@ -656,6 +672,33 @@ def main() -> int:
             print(out)
             return 0 if not out.startswith(("SKIP", "ERROR",
                                             "nothing")) else 1
+    if cmd == "tasks":
+        # wispd tasks — background agents: status + last log line
+        from wisp import agents
+        ts = agents.tasks()
+        if not ts:
+            print("no agents on record")
+            return 0
+        for name, t in sorted(ts.items(),
+                              key=lambda kv: kv[1].get("ts", "")):
+            tail = t.get("tail") or ""
+            print(f"{t['status']:<10} {name:<24} {t.get('task','')[:50]}"
+                  + (f"\n{'':<36}↳ {tail[:90]}" if tail else ""))
+        return 0
+    if cmd == "train":
+        # wispd train stats|history|bank|replay — arena telemetry
+        from wisp import train
+        sub = sys.argv[2] if len(sys.argv) > 2 else "stats"
+        if sub == "history":
+            print(train.history_text())
+        elif sub == "bank":
+            print(train.bank_text())
+        elif sub == "rebuild":
+            bank = train.replay_all()
+            print(f"rebuilt skill bank — {len(bank)} patterns")
+        else:
+            print(train.stats_text())
+        return 0
     if cmd == "learn":
         from wisp import learn
         out = learn.weekly()
@@ -807,6 +850,25 @@ def main() -> int:
     if cmd == "theme":
         from wisp import theme
         name = sys.argv[2] if len(sys.argv) > 2 else ""
+        if name in ("--check", "--css"):
+            # wispd theme --check [THEME_DIR]      contrast audit, exit 1 on fail
+            # wispd theme --css [THEME_DIR] [OUT]  theme.css (OUT '-' = stdout)
+            rest = sys.argv[3:]
+            res = theme.load(rest[0] if rest else None, cfg)
+            if name == "--css":
+                out = rest[1] if len(rest) > 1 else None
+                if out == "-":
+                    sys.stdout.write(theme.css(res))
+                else:
+                    print(theme.write_css(res, out))
+                return 0
+            rows = theme.check(res)
+            print(f"source {res['source']}, mode {res['mode']}")
+            for r in rows:
+                mark = "ok  " if r["ok"] else "FAIL"
+                print(f"{mark} {r['pair']:<18} {r['fg']} on {r['bg']}  "
+                      f"{r['ratio']:>5.2f} (min {r['min']})")
+            return 0 if all(r["ok"] for r in rows) else 1
         if name:
             if name not in theme.THEMES:
                 print(f"unknown theme {name!r} — "
@@ -878,7 +940,7 @@ def main() -> int:
     print("usage: wispd [daemon|install|trigger|status|stop|choice"
           "|agent|memory|task_status|task_cancel|learn|label|harness|trace"
           "|doctor|tui|skills [import [--list] dir]|suggestions"
-          "|recipes [approve name]|fails|theme [name]|sync [repo]"
+          "|recipes [approve name]|fails|theme [name|--check|--css]|sync [repo]"
           "|eval route [n]"
           "|config [set k v]]")
     return 2
