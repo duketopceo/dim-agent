@@ -22,6 +22,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 from . import config, speech
+from . import errors_codes as _errors
 
 JEV_QUESTIONS = {
     "route": {
@@ -170,6 +171,9 @@ def _record_finish(rec: dict, state=None, settled: bool = False
     return out
 
 
+_LEVEL_WINDOW = 20
+
+
 def _amplitude_sampler(seconds: int | None, state=None,
                        stop_ev=None) -> None:
     """Breathing darkness: sample mic RMS, publish level for the overlay."""
@@ -189,17 +193,18 @@ def _amplitude_sampler(seconds: int | None, state=None,
         proc = subprocess.Popen(
             arec,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=hypr_env())
+        # one 100 ms window (20 samples at 200 Hz) per read: the level
+        # arrives at an even 10 Hz instead of a burst once a second
         while True:
             if stop_ev is not None and stop_ev.is_set():
                 break
-            chunk = proc.stdout.read(200)
-            if not chunk:
+            w = proc.stdout.read(_LEVEL_WINDOW)
+            if not w:
                 break
-            step = 20
-            for i in range(0, len(chunk) - step, step):
-                w = chunk[i:i + step]
-                rms = sum(abs(b - 128) for b in w) / (len(w) * 128)
-                publish(min(1.0, rms * 6))
+            if len(w) < _LEVEL_WINDOW:
+                continue  # short tail at EOF — next read ends the loop
+            rms = sum(abs(b - 128) for b in w) / (len(w) * 128)
+            publish(min(1.0, rms * 6))
         if proc.poll() is None:
             proc.kill()
         proc.wait(timeout=5)
@@ -269,11 +274,14 @@ def _transcribe_openai(wav: pathlib.Path, stt: dict,
         f"--{boundary}--".encode(),
         b"",
     ])
+    from . import brain as _brain
     req = urllib.request.Request(
         f"{base}/audio/transcriptions", data=body,
         headers={"Authorization": f"Bearer {key}",
                  "User-Agent": "wisp/1.0",
-                 "Content-Type": f"multipart/form-data; boundary={boundary}"})
+                 **_brain.app_headers(base),
+                 "Content-Type":
+                 f"multipart/form-data; boundary={boundary}"})
     with urllib.request.urlopen(req, timeout=60) as resp:
         return " ".join(
             json.loads(resp.read()).get("text", "").split())
@@ -305,29 +313,65 @@ def active_window() -> dict:
     return platform.active_window()
 
 
+def _jev_is_local(url: str) -> bool:
+    import urllib.parse
+    return (urllib.parse.urlparse(url).hostname or "") in \
+        ("localhost", "127.0.0.1", "::1")
+
+
 def ask_jev(transcript: str, model: str, questions: dict,
             context: str = "") -> dict:
+    """Jev decisions call. A loopback endpoint (jev-shim) needs no
+    OPENROUTER_API_KEY; a remote one does. Failures raise WispError:
+    refused/reset (after one fast retry), HTTP errors and unparseable
+    replies are `jev_down`, a timeout is `timeout` (never retried)."""
+    from . import errors_codes as _ec
     state_txt = f"{context}\n\nThe user said: \"{transcript}\"" \
         if context else f'The user said: "{transcript}"'
     payload = {"model": model, "state": state_txt, "questions": questions}
+    headers = {"Content-Type": "application/json",
+               "HTTP-Referer": "https://github.com/duketopceo/wisp",
+               "X-Title": "Wisp"}
+    endpoint = config.JEV_ENDPOINT
+    if _jev_is_local(endpoint):
+        key = config.load_env_key("OPENROUTER_API_KEY")
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+    else:
+        try:
+            headers["Authorization"] = f"Bearer {config.load_api_key()}"
+        except RuntimeError as e:
+            raise _ec.WispError("jev_down", str(e)) from None
     req = urllib.request.Request(
-        config.JEV_ENDPOINT, data=json.dumps(payload).encode(),
-        headers={
-            "Authorization": f"Bearer {config.load_api_key()}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/duketopceo/wisp",
-            "X-Title": "Wisp",
-        }, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Jev HTTP {e.code}: {e.read().decode()[:200]}") \
-            from None
+        endpoint, data=json.dumps(payload).encode(), headers=headers,
+        method="POST")
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            raise _ec.WispError(
+                "jev_down",
+                f"Jev HTTP {e.code}: {e.read().decode()[:200]}") from None
+        except Exception as e:
+            if attempt == 1 and _ec.is_connection_failure(e):
+                time.sleep(0.05)
+                continue
+            raise _ec.classify(e, "jev_down") from None
+
+
+def _publish_error(state, exc: BaseException) -> None:
+    """End a turn in `error` with a closed-set code: `error` is the
+    human-safe string, `error_detail` the raw text (local only)."""
+    from . import errors_codes as _ec
+    err = _ec.classify(exc, "internal")
+    state.transition("error", error=err.public, error_code=err.code,
+                     error_detail=err.detail[:500])
 
 
 def ask_chat(transcript: str, cfg: dict, session_text: str = "",
-             image_b64: str | None = None, on_delta=None) -> str:
+             image_b64: str | None = None, on_delta=None,
+             meta: dict | None = None) -> str:
     """Real answer via the configured brain provider ([brain] default).
     image_b64 attaches a screenshot — dropped when the provider lacks
     vision support (U6 capability gating)."""
@@ -367,9 +411,14 @@ def ask_chat(transcript: str, cfg: dict, session_text: str = "",
                          "content": f"Recent conversation:\n{session_text}"})
     messages.append({"role": "user", "content": user_content})
     if on_delta is not None:
-        return brain.chat_stream(messages, cfg, on_delta=on_delta,
-                                 timeout=30)["content"].strip()
-    return brain.chat(messages, cfg, timeout=30)["content"].strip()
+        out = brain.chat_stream(messages, cfg, on_delta=on_delta,
+                                timeout=30)
+    else:
+        out = brain.chat(messages, cfg, timeout=30)
+    if meta is not None:
+        meta.update(provider=out.get("provider"),
+                    fallback_from=out.get("fallback_from"))
+    return out["content"].strip()
 
 
 def capture_screen() -> pathlib.Path | None:
@@ -427,6 +476,17 @@ def dictation_text(text: str) -> str:
     return _DICTATE_PREFIX.sub("", text, count=1).strip() or text
 
 
+def _publish_delta(state, partial: str) -> None:
+    """Streamed answer text → state, coalesced by the bus when there is
+    one; plain handles (tests, standalone State) just transition."""
+    from . import state as _state
+    if isinstance(state, _state.TurnState):
+        state._bus.publish(state.turn_id, status="speaking",
+                           answer=partial, coalesce=True)
+    else:
+        state.transition("speaking", answer=partial)
+
+
 def _end_speaking(state):
     """Flip speaking → done when TTS exits (only if nothing moved on)."""
     def cb():
@@ -461,7 +521,8 @@ def execute(answers: dict, cfg: dict, harness: dict | None = None,
     gated = route not in ("launch", "answer", "dictation") and \
         action not in ("launch", "answer")
     if gated and (tool_choice in ("launch", "answer")
-                  or tools.risk_of(tool_choice) == "safe"):
+                  or tools.risk_of(tool_choice)
+                  in ("safe", "interactive")):
         gated = False
     if gated and risk > threshold:
         return f"BLOCKED (risk={risk:.2f} > {threshold})"
@@ -633,40 +694,58 @@ def apply_choice(answers: dict, picked: str) -> dict:
 
 def run_listen(cfg: dict, state, wait_for_choice=None,
                wav: pathlib.Path | None = None,
-               interrupted=None) -> int:
+               interrupted=None, spans=None, turn_id=None) -> int:
     """One push-to-talk cycle inside the daemon.
 
     `wav` set → toggle mode: the daemon already captured audio between
     two presses, so skip recording. `wait_for_choice(timeout)` -> picked
     label or None; injected by the daemon so ambiguous turns resolve via
     IPC/widget clicks. With no chooser wired, low-confidence turns cancel
-    rather than guess.
+    rather than guess. `spans` (trace.Spans) carries the press/release
+    timestamps from the daemon; absent, spans start at this call.
+    `state` may be a StateBus: the turn is then `turn_id` (adopted from
+    the daemon's first press) or a fresh one, and every write goes
+    through the bus tagged with it.
     """
     secs = int(cfg.get("audio", {}).get("seconds", "60"))
     model = cfg.get("agent", {}).get("model", "typesafe/jev-1.13")
-    t0 = time.monotonic()
-    timing = {}
     from . import trace as _trace
-    turn = _trace.new_turn()
+    sp = spans or _trace.Spans()
+    from . import state as _state
+    if isinstance(state, _state.StateBus):
+        turn = turn_id or state.begin_turn()
+        _trace.set_turn(turn)
+        state = state.turn(turn)
+    else:
+        turn = _trace.new_turn()
+    sp.bind(turn)
     _trace.emit(turn, "listen_start", "lifecycle",
                 {"seconds": secs, "model": model})
     try:
         if wav is None:
             state.transition("listening", transcript="", result="",
-                             answer="", choices=[], points=[], error="")
+                             answer="", choices=[], points=[], error="",
+                             error_code="", error_detail="")
+            sp.record("press", sp.t0)
+            rec_start = sp.now()
             wav = record(secs, state)
-        timing["record_ms"] = round((time.monotonic() - t0) * 1000)
+            sp.record("record", rec_start)
+            sp.set_release()
+        rec_ms = sp.ms.get("record", 0)
         _trace.emit(turn, "record", "stt",
                     {"wav": str(wav),
                      "bytes": wav.stat().st_size if wav.exists() else 0},
-                    timing["record_ms"])
+                    rec_ms)
         state.transition("transcribing")
-        text = transcribe(wav, cfg)
-        timing["stt_ms"] = round((time.monotonic() - t0) * 1000
-                                 - timing["record_ms"])
+        sp.record("release", sp.rel0)
+        try:
+            text = transcribe(wav, cfg)
+        except Exception as e:
+            raise _errors.classify(e, "stt_down") from e
+        sp.record("stt", sp.rel0)
         _trace.emit(turn, "transcribe", "stt",
                     {"provider": cfg.get("stt", {}).get("provider", "local"),
-                     "text": text}, timing["stt_ms"])
+                     "text": text}, sp.ms["stt"])
         state.transition("deciding", transcript=text)
         if not text or "[BLANK" in text:
             state.transition("done", result="heard nothing")
@@ -675,7 +754,8 @@ def run_listen(cfg: dict, state, wait_for_choice=None,
         from .tools import adapters
         harness = {"apps": adapters.best_catalog(),
                    "context": adapters.context()}
-        win = active_window()
+        with sp.timed("hyprctl"):
+            win = active_window()
         if state:
             state.transition("deciding", transcript=text,
                              focus={"app": win.get("class", ""),
@@ -689,7 +769,8 @@ def run_listen(cfg: dict, state, wait_for_choice=None,
         shot_png = None
         shot_b64 = None
         if cfg.get("agent", {}).get("screenshots", "true") == "true":
-            shot_png = capture_screen()
+            with sp.timed("screenshot"):
+                shot_png = capture_screen()
             if shot_png:
                 try:
                     shot_b64 = base64.b64encode(
@@ -701,7 +782,9 @@ def run_listen(cfg: dict, state, wait_for_choice=None,
         # goal memory — continuations ("it's open, just hit cmd-t") join
         # the open goal instead of starting a fresh act
         from . import goals as _goals
-        goal, joined = _goals.join_or_new(text, win.get("class", ""), cfg)
+        with sp.timed("goal"):
+            goal, joined = _goals.join_or_new(text, win.get("class", ""),
+                                              cfg)
         context += "\n" + _goals.context_text()
         _trace.emit(turn, "goal", "thought",
                     {"joined": joined, "goal": goal["text"][:160]})
@@ -711,7 +794,8 @@ def run_listen(cfg: dict, state, wait_for_choice=None,
         if session_text:
             context += f"\nRecent conversation:\n{session_text}"
         from . import memory
-        block = memory.context_block(text)
+        with sp.timed("memory"):
+            block = memory.context_block(text)
         if block:
             context += f"\n{block}"
         # refinement loop: a labeled-bad last turn or a correction cue
@@ -733,6 +817,8 @@ def run_listen(cfg: dict, state, wait_for_choice=None,
                         {"via": corr["via"], "prior": corr["prior_task"]})
         # router: jev (default) | chat (transcript straight to answer
         # brain) | off (always clarify via choices) — Rust parity
+        sp.record("context", sp.mark_ns("stt"))
+        route_start = sp.now()
         router = cfg.get("brain", {}).get("router", "jev")
         agent_m = re.match(r"^\s*wisp\s+agent[:,.\s-]+(.*)$", text,
                            re.IGNORECASE)
@@ -748,13 +834,14 @@ def run_listen(cfg: dict, state, wait_for_choice=None,
         else:
             resp = ask_jev(text, model, build_questions(harness),
                            context=context)
-        timing["jev_ms"] = round((time.monotonic() - t0) * 1000
-                                 - timing["record_ms"] - timing["stt_ms"])
+        sp.record("route", route_start)
+        sp.arm("first_token", sp.mark_ns("route"))
+        sp.arm("first_step", sp.mark_ns("route"))
         answers = resp.get("answers", {})
         _trace.emit(turn, "decision", "thought",
                     {"model": model, "answers": answers,
                      "latency_ms": resp.get("latency_ms")},
-                    timing["jev_ms"])
+                    sp.ms["context"] + sp.ms["route"])
         # transcript rescue: "open discord" with app=none shouldn't
         # clarify-prompt — the app name is right there in the words
         if answers.get("app", {}).get("choice", "none") in ("none", "", None):
@@ -833,54 +920,66 @@ def run_listen(cfg: dict, state, wait_for_choice=None,
             session.append_turn(text, route="act", reply=q,
                                 result=result)
             notify(result)
+            sp.record("done", sp.rel0)
             log_decision({"ts": datetime.now(timezone.utc).isoformat(),
                           "transcript": text, "answers": answers,
-                          "result": result, "timing_ms": timing,
+                          "result": result,
+                          "timing_ms": sp.legacy_timing(),
                           "corrected": False})
             return 0
         if result == "ANSWERED":
             pts = []
-            _last_push = [0.0]
 
             def _delta(acc):
                 # stream the answer into state.json as it arrives — the
-                # cursor bubble renders it live. Throttled; incomplete
+                # cursor bubble renders it live. Rate-limited by the
+                # bus (coalesced, latest wins); incomplete
                 # trailing [POINT…/markdown-ish brackets hidden so the
                 # bubble never flashes raw tags.
+                sp.fire("first_token")
                 if state is None:
                     return
-                now = time.monotonic()
-                if now - _last_push[0] < 0.12:
-                    return
-                _last_push[0] = now
                 partial = re.sub(r"\[[A-Za-z]*:?[^\]]*$", "", acc)
-                state.transition("speaking", answer=partial)
+                _publish_delta(state, partial)
 
             try:
                 _t = time.monotonic()
+                _meta: dict = {}
                 reply = ask_chat(text, cfg, session_text,
                                  image_b64=shot_b64,
-                                 on_delta=_delta if state else None)
+                                 on_delta=_delta if state else None,
+                                 meta=_meta)
+                sp.fire("first_token")  # non-streaming brains
                 _trace.emit(turn, "brain_call", "brain",
                             {"endpoint": "chat/completions",
                              "model": cfg.get("agent", {})
                              .get("answer_model", ""),
+                             "provider": _meta.get("provider"),
+                             "fallback_from": _meta.get("fallback_from"),
                              "reply": reply},
                             round((time.monotonic() - _t) * 1000))
             except Exception as e:
-                result = f"ANSWER_FAILED ({e})"
-                reply = answer_text(text)
+                # every brain entry failed (brain_down), or a timeout /
+                # bug: the turn ends in a typed error rather than a
+                # canned answer the user would mistake for a real one
+                raise _errors.classify(e, "brain_down") from e
             if reply:
                 from . import points as _points
                 reply, raw = _points.extract(reply)
                 if raw:
-                    pts = _points.to_logical(raw, _points.monitors())
+                    _mons = _points.monitors()
+                    if _points.img_space_is_logical():
+                        pts = _points.canvas_to_logical(raw, _mons)
+                    else:
+                        pts = _points.to_logical(raw, _mons)
             if pts:
                 _trace.emit(turn, "points", "act", {"points": pts})
             state.transition("speaking", result=result, answer=reply,
                              points=pts)
             _t = time.monotonic()
+            tts_start = sp.now()
             proc = speech.speak(reply, cfg)
+            sp.record("tts_start", tts_start)
             _trace.emit(turn, "speak", "tts",
                         {"cmd": cfg.get("voice", {}).get("cmd", ""),
                          "spawned": proc is not None},
@@ -899,20 +998,24 @@ def run_listen(cfg: dict, state, wait_for_choice=None,
         except Exception:
             pass
         notify(result)
-        timing["act_ms"] = round((time.monotonic() - t0) * 1000)
+        sp.record("done", sp.rel0)
         log_decision({"ts": datetime.now(timezone.utc).isoformat(),
                       "transcript": text, "answers": answers, "result": result,
-                      "timing_ms": timing,
+                      "timing_ms": sp.legacy_timing(),
                       "corrected": bool(answers.get("corrected_by_user"))})
         return 0
     except Exception as e:
-        _trace.emit(turn, "error", "error", {"error": str(e)})
-        state.transition("error", error=str(e))
+        err = _errors.classify(e, "internal")
+        _trace.emit(turn, "error", "error",
+                    {"error": str(e), "error_code": err.code})
+        _publish_error(state, err)
         log_decision({"ts": datetime.now(timezone.utc).isoformat(),
-                      "result": f"ERROR ({e})", "timing_ms": timing})
-        notify(f"error: {e}")
-        print(f"error: {e}", file=sys.stderr)
+                      "result": f"ERROR ({e})",
+                      "timing_ms": sp.legacy_timing()})
+        notify(f"error: {err.public}")
+        print(f"error: {err.code}: {e}", file=sys.stderr)
         return 1
     finally:
+        sp.close()
         if state:
             state.set_level(0.0)

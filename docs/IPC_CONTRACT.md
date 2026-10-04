@@ -22,7 +22,7 @@ future tray apps). Shells MUST only depend on this document.
 | cmd | extra fields | reply | effect |
 |---|---|---|---|
 | `status` | — | `{ok, state}` | `state` = full state.json snapshot |
-| `listen` | — | `{ok}` or `{ok:false,error:"busy"}` | starts a listen cycle async; kills in-flight TTS (barge-in) |
+| `listen` | `phase?: start\|stop`, `t0?: int` (client wall-clock ns of the keypress; additive, optional) | `{ok}` or `{ok:false,error:"busy"}` | starts a listen cycle async; kills in-flight TTS (barge-in) |
 | `choice` | `pick: string` | `{ok}` | resolves a pending choice/confirm |
 | `task_status` | `name: string` | `{ok, result: string}` | named-agent status |
 | `task_cancel` | `name: string` | `{ok, result: string}` | cancel named agent |
@@ -62,10 +62,41 @@ lacks a section. Shells may offer a settings page on top of this command.
   "goal": {"text": "string", "status": "open|done|failed"},
   "level": 0.0,
   "tasks": {"name": "running|done|failed|cancelled"},
-  "error": "string",
-  "started_at": "ISO-8601"
+  "error": "string — human-safe copy, never raw exception text",
+  "error_code": "closed set, see below; \"\" when no error",
+  "error_detail": "string — raw failure text, local only",
+  "health": {"<endpoint>": {"ok": true, "since": "ISO-8601", "latency_ms": 12, "code": null}},
+  "started_at": "ISO-8601",
+  "turn_id": "string — turn that produced this write",
+  "seq": 0,
+  "updated_at": "ISO-8601",
+  "contract_version": 1,
+  "heartbeat_at": "ISO-8601|null — refreshed every 15 s while transcribing/deciding/acting"
 }
 ```
+
+Single publisher (Python core): one `StateBus` owns every write. `seq`
+increases by one per written snapshot; a write from a turn that is no
+longer current is dropped; `level` is rate-limited to ~12 writes/s.
+Shells still just read the file — all of these fields are additive.
+
+Error codes (additive, Python core; U7): when `status` is `error`,
+`error_code` is one of `jev_down`, `brain_down`, `stt_down`,
+`ground_down`, `ground_failed`, `timeout`, `cancelled`, `busy`,
+`stale_prompt`, `restarted`, `tool_failed`, `budget_exceeded`,
+`internal`. Shells render copy from the code and must treat unknown
+codes as `internal`. `error_detail` is for logs and `wispd watch`, not
+for display. A turn that starts (`listening`) clears all three.
+
+Health (additive; U7): `health` maps local endpoint names (`jev`,
+`brain_<provider>`, `ollama`, `uitars`, `stt`, plus hook-registered
+ones such as `hypr`) to `{ok, since, latency_ms, code}`; `latency_ms`
+is from the first probe and any later transition, `code` is null while
+ok. It is republished on first observation and on every ok/down
+transition, each with a stream event
+`{"type":"event","name":"health_changed","data":{name,ok,code}}`.
+Absent or `{}` on older cores and while probing is disabled. Remote
+endpoints are never probed and never listed.
 
 Confirmation gate: when a mutating/shell action needs approval, the
 core transitions to `awaiting_choice` with `choices` = e.g.
@@ -105,8 +136,13 @@ spoken answer and publishes the normalized list.
 - `trace.jsonl` — full-fidelity dev trace (`[debug] trace`, default on):
   one event per line `{ts, turn, step, kind, ms, data}` covering
   listen_start/record/transcribe/decision/dispatch/tool_call/
-  tool_result/brain_call/answer/speak/points/ipc/error. `wispd trace`
-  `--tail N --turn <id> --kind <k>` on both cores. Rotates at 10 MB;
+  tool_result/brain_call/answer/speak/points/ipc/error, plus `kind=span`
+  events (`step` = press, release, stt, context, route, first_token,
+  first_step, tts_start, done, and sub-spans screenshot/hyprctl/memory/
+  goal; `ms` = duration, `data.offset_ms` from the keypress,
+  `data.t0_source` client|daemon). `wispd trace`
+  `--tail N --turn <id> --kind <k>` on both cores; Python core adds
+  `--latency [--since 24h]` (p50/p90 per budget path). Rotates at 10 MB;
   never logs secrets.
 - `recall.db` — sqlite-vec/FTS5 long-term recall.
 
