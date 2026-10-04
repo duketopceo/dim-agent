@@ -22,7 +22,7 @@ future tray apps). Shells MUST only depend on this document.
 | cmd | extra fields | reply | effect |
 |---|---|---|---|
 | `status` | — | `{ok, state}` | `state` = full state.json snapshot |
-| `listen` | — | `{ok}` or `{ok:false,error:"busy"}` | starts a listen cycle async; kills in-flight TTS (barge-in) |
+| `listen` | `phase?: start\|stop`, `t0?: int` (client wall-clock ns of the keypress; additive, optional) | `{ok}` or `{ok:false,error:"busy"}` | starts a listen cycle async; kills in-flight TTS (barge-in) |
 | `choice` | `pick: string` | `{ok}` | resolves a pending choice/confirm |
 | `task_status` | `name: string` | `{ok, result: string}` | named-agent status |
 | `task_cancel` | `name: string` | `{ok, result: string}` | cancel named agent |
@@ -63,9 +63,19 @@ lacks a section. Shells may offer a settings page on top of this command.
   "level": 0.0,
   "tasks": {"name": "running|done|failed|cancelled"},
   "error": "string",
-  "started_at": "ISO-8601"
+  "started_at": "ISO-8601",
+  "turn_id": "string — turn that produced this write",
+  "seq": 0,
+  "updated_at": "ISO-8601",
+  "contract_version": 1,
+  "heartbeat_at": "ISO-8601|null — refreshed every 15 s while transcribing/deciding/acting"
 }
 ```
+
+Single publisher (Python core): one `StateBus` owns every write. `seq`
+increases by one per written snapshot; a write from a turn that is no
+longer current is dropped; `level` is rate-limited to ~12 writes/s.
+Shells still just read the file — all of these fields are additive.
 
 Confirmation gate: when a mutating/shell action needs approval, the
 core transitions to `awaiting_choice` with `choices` = e.g.
@@ -105,8 +115,13 @@ spoken answer and publishes the normalized list.
 - `trace.jsonl` — full-fidelity dev trace (`[debug] trace`, default on):
   one event per line `{ts, turn, step, kind, ms, data}` covering
   listen_start/record/transcribe/decision/dispatch/tool_call/
-  tool_result/brain_call/answer/speak/points/ipc/error. `wispd trace`
-  `--tail N --turn <id> --kind <k>` on both cores. Rotates at 10 MB;
+  tool_result/brain_call/answer/speak/points/ipc/error, plus `kind=span`
+  events (`step` = press, release, stt, context, route, first_token,
+  first_step, tts_start, done, and sub-spans screenshot/hyprctl/memory/
+  goal; `ms` = duration, `data.offset_ms` from the keypress,
+  `data.t0_source` client|daemon). `wispd trace`
+  `--tail N --turn <id> --kind <k>` on both cores; Python core adds
+  `--latency [--since 24h]` (p50/p90 per budget path). Rotates at 10 MB;
   never logs secrets.
 - `recall.db` — sqlite-vec/FTS5 long-term recall.
 
